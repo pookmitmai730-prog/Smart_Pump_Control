@@ -1,0 +1,55 @@
+/* ดึงฟอนต์ Noto Sans Thai จาก Google Fonts โดยตรง */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+Thai:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+* { font-family: 'Inter', 'Noto Sans Thai', sans-serif !important; }
+
+:root {
+  /* ... (ส่วน root ของเดิมของคุณคงไว้เหมือนเดิม) */
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fff;
+  --border: #e5e4e7;
+  --code-bg: #f4f3ec;
+  --accent: #aa3bff;
+  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  --social-bg: rgba(244, 243, 236, 0.5);
+  --shadow: rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body { margin: 0; background-color: #070b19; }
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+/* --- การหมุนของลูกศรวาล์ว (ปรับให้สมูทขึ้น) --- */
+.rotate-cw {
+  animation: spin-cw 1.5s linear infinite; /* ปรับเหลือ 1.5s ให้ดูตอบสนองไวขึ้น */
+}
+
+.rotate-ccw {
+  animation: spin-ccw 1.5s linear infinite;
+}
+
+@keyframes spin-cw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes spin-ccw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
