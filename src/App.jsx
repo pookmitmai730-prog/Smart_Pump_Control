@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
 import { 
-  Activity, Power, Sliders, Thermometer, Zap, 
+  Activity, Power, Sliders, Thermometer, 
   Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar
 } from 'lucide-react';
 
@@ -186,7 +186,7 @@ export default function PumpDashboard() {
           <h1 className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent flex items-center gap-2">
             <Gauge className="text-cyan-400 w-8 h-8" /> Smart Pump Control Dashboard (บ้านไผ่ล้อม)
           </h1>
-          <p className="text-slate-400 text-sm mt-1">ระบบควบคุมและมอนิเตอร์ปั๊มน้ำแรงดันปลายสายแบบเรียลไทม์</p>
+          <p className="text-slate-400 text-sm mt-1">ระบบควบคุมและมอนิเตอร์ปั๊มน้ำด้วยแรงดันปลายสาย(P3)แบบเรียลไทม์</p>
         </div>
         
         {/* สถานะการเชื่อมต่อ & โหมด & ปุ่มล็อกอิน/ล็อกเอาต์ */}
@@ -298,7 +298,7 @@ export default function PumpDashboard() {
           </div>
         </div>
 
-        {/* 3. รายงานกระแส & ความร้อนมอเตอร์ */}
+        {/* 3. รายงานกระแส & ความร้อนมอเตอร์ (เปลี่ยนโลโก้จากสายฟ้าเป็นรูปปั๊ม/แอคทีฟมอเตอร์) */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
           <div>
             <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
@@ -309,7 +309,7 @@ export default function PumpDashboard() {
             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-3 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-3 bg-cyan-500/10 rounded-lg text-cyan-400">
-                  <Zap className="w-6 h-6" />
+                  <Activity className="w-6 h-6" />
                 </div>
                 <div>
                   <span className="text-xs text-slate-400 block">กระแสไฟฟ้ามอเตอร์</span>
@@ -344,14 +344,14 @@ export default function PumpDashboard() {
 
       </div>
 
-      {/* --- ส่วนการตั้งค่าช่วงเวลาและขีดจำกัดแรงดันหยุดปั๊มตามช่วงเวลา (วางแทนที่ส่วน Setpoint เดิม) --- */}
+      {/* --- ส่วนการตั้งค่าช่วงเวลาและขีดจำกัดแรงดันหยุดปั๊มตามช่วงเวลา --- */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
           <div>
             <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
-              <Calendar className="w-5 h-5" /> ตั้งค่าช่วงเวลาและขีดจำกัดแรงดันหยุดปั๊มตามช่วงเวลา
+              <Calendar className="w-5 h-5" /> ตั้งค่าช่วงเวลาเพื่อหยุดการทำงานของปั้ม
             </h2>
-            <p className="text-slate-400 text-xs mt-1">กำหนดช่วงเวลาแต่ละช่วงและค่าแรงดันขีดจำกัด (ต้องเข้าสู่ระบบแอดมินก่อนจึงจะเพิ่ม/ลบได้)</p>
+            <p className="text-slate-400 text-xs mt-1">กำหนดช่วงเวลาเพื่อหยุดการทำงานของปั้ม (ต้องเข้าสู่ระบบแอดมินก่อนจึงจะเพิ่ม/ลบได้)</p>
           </div>
         </div>
 
