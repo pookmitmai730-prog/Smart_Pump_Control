@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
 import { 
   Activity, Power, Sliders, Thermometer, 
-  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar
+  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings
 } from 'lucide-react';
 
 // --- ค่ากำหนด Firebase ---
@@ -35,6 +35,10 @@ export default function PumpDashboard() {
   const [newStartTime, setNewStartTime] = useState('08:00');
   const [newEndTime, setNewEndTime] = useState('17:00');
   const [newLimitPressure, setNewLimitPressure] = useState(4.0);
+
+  // --- State ใหม่: การกำหนดค่าเริ่มต้นหลังจากปั๊มหยุดทำงาน ---
+  const [restartDelay, setRestartDelay] = useState(60);       // หน่วงเวลาก่อนเริ่มใหม่ (วินาที)
+  const [restartMinPressure, setRestartMinPressure] = useState(2.5); // แรงดันต่ำสุดที่อนุญาตให้สตาร์ทกลับมา (Bar)
 
   // --- State สำหรับติดตามเวลาล่าสุดที่ข้อมูลส่งมา (เช็คไฟดับ / หลุดการเชื่อมต่อ) ---
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -76,6 +80,11 @@ export default function PumpDashboard() {
         if (data.schedules) {
           setSchedules(data.schedules);
         }
+        // โหลดค่ากำหนดหลังปั๊มหยุดจาก Firebase (ถ้ามี)
+        if (data.config) {
+          if (data.config.restartDelay !== undefined) setRestartDelay(data.config.restartDelay);
+          if (data.config.restartMinPressure !== undefined) setRestartMinPressure(data.config.restartMinPressure);
+        }
         
         setLastUpdated(Date.now());
         setIsOfflineOrPowerLoss(false);
@@ -97,7 +106,7 @@ export default function PumpDashboard() {
     }
   };
 
-  // --- ฟังก์ชันควบคุมโหมดและปั๊ม (ทำงานได้ทันทีถ้าล็อกอินแล้ว) ---
+  // --- ฟังก์ชันควบคุมโหมดและปั๊ม ---
   const handleModeToggle = () => {
     if (!isAdminLoggedIn) {
       setShowAuthModal(true);
@@ -138,6 +147,25 @@ export default function PumpDashboard() {
     set(ref(db, 'pumpSystem/schedules'), updatedSchedules);
   };
 
+  // --- ฟังก์ชันบันทึกค่ากำหนดการทำงานหลังจากปั๊มหยุด ---
+  const handleSaveRestartConfig = () => {
+    if (!isAdminLoggedIn) {
+      setShowAuthModal(true);
+      return;
+    }
+    const configData = {
+      restartDelay: parseInt(restartDelay),
+      restartMinPressure: parseFloat(restartMinPressure)
+    };
+    set(ref(db, 'pumpSystem/config'), configData)
+      .then(() => {
+        alert("บันทึกการตั้งค่าเริ่มต้นหลังปั๊มหยุดเรียบร้อยแล้ว!");
+      })
+      .catch((error) => {
+        alert("เกิดข้อผิดพลาดในการบันทึก: " + error.message);
+      });
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans relative">
       
@@ -155,7 +183,7 @@ export default function PumpDashboard() {
               <Lock className="w-10 h-10" />
             </div>
             <h3 className="text-lg font-bold text-center mb-1 text-white">เข้าสู่ระบบผู้ดูแลระบบ</h3>
-            <p className="text-slate-400 text-xs text-center mb-5">กรุณากรอกรหัสผ่านเพื่อปลดล็อกสิทธิ์ควบคุมปั๊มและแก้ไขตารางเวลา</p>
+            <p className="text-slate-400 text-xs text-center mb-5">กรุณากรอกรหัสผ่านเพื่อปลดล็อกสิทธิ์ควบคุมปั๊มและแก้ไขตั้งค่าระบบ</p>
             
             <form onSubmit={handleAdminLogin} className="space-y-4">
               <input 
@@ -298,7 +326,7 @@ export default function PumpDashboard() {
           </div>
         </div>
 
-        {/* 3. รายงานกระแส & ความร้อนมอเตอร์ (เปลี่ยนโลโก้จากสายฟ้าเป็นรูปปั๊ม/แอคทีฟมอเตอร์) */}
+        {/* 3. รายงานกระแส & ความร้อนมอเตอร์ */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
           <div>
             <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
@@ -344,6 +372,56 @@ export default function PumpDashboard() {
 
       </div>
 
+      {/* --- ส่วนใหม่: ตั้งค่าการทำงานของปั๊มหลังจากปั๊มหยุดทำงานแล้ว (Pump Restart Configuration) --- */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl mb-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
+              <Settings className="w-5 h-5" /> ตั้งค่าเริ่มต้นหลังจากปั๊มหยุดทำงาน (Restart Configuration)
+            </h2>
+            <p className="text-slate-400 text-xs mt-1">กำหนดระยะเวลาหน่วงก่อนเริ่มใหม่และค่าแรงดันขั้นต่ำเพื่อป้องกันปั๊มตัดต่อถี่เกินไป</p>
+          </div>
+        </div>
+
+        <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">หน่วงเวลาก่อนเริ่มทำงานใหม่ (วินาที)</label>
+            <input 
+              type="number" 
+              value={restartDelay} 
+              onChange={(e) => setRestartDelay(e.target.value)}
+              disabled={!isAdminLoggedIn}
+              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-sm disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">แรงดันขั้นต่ำอนุญาตให้สตาร์ท (Bar)</label>
+            <input 
+              type="number" 
+              step="0.1"
+              value={restartMinPressure} 
+              onChange={(e) => setRestartMinPressure(e.target.value)}
+              disabled={!isAdminLoggedIn}
+              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-sm disabled:opacity-50"
+            />
+          </div>
+          <div>
+            {isAdminLoggedIn ? (
+              <button 
+                onClick={handleSaveRestartConfig}
+                className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold py-2 px-4 rounded-lg transition-all flex items-center justify-center gap-1.5 text-sm cursor-pointer h-10"
+              >
+                บันทึกค่ากำหนดหลังปั๊มหยุด
+              </button>
+            ) : (
+              <div className="text-center text-xs text-slate-500 bg-slate-900/50 border border-slate-800 p-2.5 rounded-lg h-10 flex items-center justify-center">
+                🔒 ต้องล็อกอินแอดมินเพื่อบันทึก
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* --- ส่วนการตั้งค่าช่วงเวลาและขีดจำกัดแรงดันหยุดปั๊มตามช่วงเวลา --- */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
@@ -355,7 +433,7 @@ export default function PumpDashboard() {
           </div>
         </div>
 
-        {/* ฟอร์มเพิ่มช่วงเวลา (เปิดใช้งานเฉพาะตอนล็อกอินแล้ว) */}
+        {/* ฟอร์มเพิ่มช่วงเวลา */}
         {isAdminLoggedIn ? (
           <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-6 grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
             <div>
