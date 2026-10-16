@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
 import { 
   Activity, Power, Sliders, Thermometer, 
-  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings
+  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings, Edit3
 } from 'lucide-react';
 
 // --- ค่ากำหนด Firebase ---
@@ -35,6 +35,9 @@ export default function PumpDashboard() {
   const [newStartTime, setNewStartTime] = useState('08:00');
   const [newEndTime, setNewEndTime] = useState('17:00');
   const [newLimitPressure, setNewLimitPressure] = useState(4.0);
+
+  // --- State เพิ่มเติมสำหรับการแก้ไขข้อมูล (Editing Mode) ---
+  const [editingId, setEditingId] = useState(null); // เก็บ ID ของรายการที่กำลังแก้ไขอยู่
 
   // --- State ใหม่: การกำหนดค่าเริ่มต้นหลังจากปั๊มหยุดทำงาน ---
   const [restartDelay, setRestartDelay] = useState(60);       // หน่วงเวลาก่อนเริ่มใหม่ (วินาที)
@@ -128,23 +131,70 @@ export default function PumpDashboard() {
     }
   };
 
-  // --- ฟังก์ชันจัดการตารางช่วงเวลาแรงดัน ---
-  const handleAddSchedule = () => {
-    const newItem = {
-      id: Date.now(),
-      startTime: newStartTime,
-      endTime: newEndTime,
-      limitPressure: parseFloat(newLimitPressure)
-    };
-    const updatedSchedules = [...schedules, newItem];
+  // --- ฟังก์ชันจัดการตารางช่วงเวลาแรงดัน (รองรับทั้งเพิ่มและบันทึกการแก้ไข) ---
+  const handleAddOrUpdateSchedule = () => {
+    let updatedSchedules;
+    if (editingId !== null) {
+      // กรณีแก้ไขรายการเดิม
+      updatedSchedules = schedules.map(item => {
+        if (item.id === editingId) {
+          return {
+            ...item,
+            startTime: newStartTime,
+            endTime: newEndTime,
+            limitPressure: parseFloat(newLimitPressure)
+          };
+        }
+        return item;
+      });
+      setEditingId(null); // รีเซ็ตสถานะแก้ไข
+    } else {
+      // กรณีเพิ่มรายการใหม่
+      const newItem = {
+        id: Date.now(),
+        startTime: newStartTime,
+        endTime: newEndTime,
+        limitPressure: parseFloat(newLimitPressure)
+      };
+      updatedSchedules = [...schedules, newItem];
+    }
+
     setSchedules(updatedSchedules);
     set(ref(db, 'pumpSystem/schedules'), updatedSchedules);
+    
+    // เคลียร์ค่าฟอร์มกลับเป็นค่าเริ่มต้น
+    setNewStartTime('08:00');
+    setNewEndTime('17:00');
+    setNewLimitPressure(4.0);
+  };
+
+  // --- ฟังก์ชันเมื่อดับเบิลคลิกที่แถวในตารางเพื่อดึงข้อมูลมาแก้ไข ---
+  const handleRowDoubleClick = (item) => {
+    if (!isAdminLoggedIn) {
+      setShowAuthModal(true);
+      return;
+    }
+    setEditingId(item.id);
+    setNewStartTime(item.startTime);
+    setNewEndTime(item.endTime);
+    setNewLimitPressure(item.limitPressure);
+  };
+
+  // --- ฟังก์ชันยกเลิกการแก้ไข ---
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setNewStartTime('08:00');
+    setNewEndTime('17:00');
+    setNewLimitPressure(4.0);
   };
 
   const handleDeleteSchedule = (id) => {
     const updatedSchedules = schedules.filter(item => item.id !== id);
     setSchedules(updatedSchedules);
     set(ref(db, 'pumpSystem/schedules'), updatedSchedules);
+    if (editingId === id) {
+      handleCancelEdit();
+    }
   };
 
   // --- ฟังก์ชันบันทึกค่ากำหนดการทำงานหลังจากปั๊มหยุด ---
@@ -372,7 +422,7 @@ export default function PumpDashboard() {
 
       </div>
 
-      {/* --- ส่วนใหม่: ตั้งค่าการทำงานของปั๊มหลังจากปั๊มหยุดทำงานแล้ว (Pump Restart Configuration) --- */}
+      {/* --- ส่วนการตั้งค่าการทำงานของปั๊มหลังจากปั๊มหยุดทำงานแล้ว --- */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl mb-6">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
           <div>
@@ -429,13 +479,19 @@ export default function PumpDashboard() {
             <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
               <Calendar className="w-5 h-5" /> ตั้งค่าช่วงเวลาเพื่อหยุดการทำงานของปั้ม
             </h2>
-            <p className="text-slate-400 text-xs mt-1">กำหนดช่วงเวลาเพื่อหยุดการทำงานของปั้ม (ต้องเข้าสู่ระบบแอดมินก่อนจึงจะเพิ่ม/ลบได้)</p>
+            <p className="text-slate-400 text-xs mt-1">
+              {editingId !== null ? (
+                <span className="text-amber-400 font-semibold">⚡ กำลังแก้ไขรายการ (ดับเบิลคลิกแถวในตารางเพื่อเลือกรายการแก้ไข)</span>
+              ) : (
+                "กำหนดช่วงเวลาเพื่อหยุดการทำงานของปั้ม (ดับเบิลคลิกที่แถวในตารางเพื่อแก้ไขข้อมูลเดิม)"
+              )}
+            </p>
           </div>
         </div>
 
-        {/* ฟอร์มเพิ่มช่วงเวลา */}
+        {/* ฟอร์มเพิ่ม / แก้ไขช่วงเวลา */}
         {isAdminLoggedIn ? (
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-6 grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
+          <div className={`p-4 rounded-xl border mb-6 grid grid-cols-1 sm:grid-cols-4 gap-4 items-end transition-all ${editingId !== null ? 'bg-amber-950/20 border-amber-500/50' : 'bg-slate-950 border-slate-800'}`}>
             <div>
               <label className="text-xs text-slate-400 block mb-1">เวลาเริ่มต้น</label>
               <input 
@@ -464,12 +520,24 @@ export default function PumpDashboard() {
                 className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-sm"
               />
             </div>
-            <button 
-              onClick={handleAddSchedule}
-              className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold py-2 px-4 rounded-lg transition-all flex items-center justify-center gap-1.5 text-sm cursor-pointer h-10"
-            >
-              <Plus className="w-4 h-4" /> เพิ่มช่วงเวลา
-            </button>
+            <div className="flex gap-2">
+              <button 
+                onClick={handleAddOrUpdateSchedule}
+                className={`flex-1 font-bold py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-sm cursor-pointer h-10 ${
+                  editingId !== null ? 'bg-amber-500 hover:bg-amber-400 text-slate-950' : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950'
+                }`}
+              >
+                {editingId !== null ? <><Edit3 className="w-4 h-4" /> บันทึกการแก้ไข</> : <><Plus className="w-4 h-4" /> เพิ่มช่วงเวลา</>}
+              </button>
+              {editingId !== null && (
+                <button 
+                  onClick={handleCancelEdit}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-sm h-10 cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           <div className="bg-slate-950/50 border border-slate-800/80 p-4 rounded-xl mb-6 text-center text-xs text-slate-400">
@@ -477,13 +545,13 @@ export default function PumpDashboard() {
           </div>
         )}
 
-        {/* ตารางแสดงรายการช่วงเวลา */}
+        {/* ตารางแสดงรายการช่วงเวลา (รองรับ Double Click เพื่อแก้ไข) */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-slate-300">
             <thead className="bg-slate-950 text-slate-400 uppercase text-xs border-b border-slate-800">
               <tr>
                 <th className="py-3 px-4">ลำดับ</th>
-                <th className="py-3 px-4">ช่วงเวลา</th>
+                <th className="py-3 px-4">ช่วงเวลา (ดับเบิลคลิกเพื่อแก้ไข)</th>
                 <th className="py-3 px-4">แรงดันขีดจำกัด (Bar)</th>
                 <th className="py-3 px-4 text-center">จัดการ</th>
               </tr>
@@ -491,19 +559,38 @@ export default function PumpDashboard() {
             <tbody>
               {schedules.length > 0 ? (
                 schedules.map((item, index) => (
-                  <tr key={item.id} className="border-b border-slate-800 hover:bg-slate-950/50">
+                  <tr 
+                    key={item.id} 
+                    onDoubleClick={() => handleRowDoubleClick(item)}
+                    title="ดับเบิลคลิกเพื่อแก้ไขข้อมูลนี้"
+                    className={`border-b border-slate-800 cursor-pointer transition-all ${
+                      editingId === item.id ? 'bg-amber-500/20 border-amber-500/50' : 'hover:bg-slate-900/60'
+                    }`}
+                  >
                     <td className="py-3 px-4 font-medium text-slate-400">{index + 1}</td>
-                    <td className="py-3 px-4 text-cyan-400 font-semibold">{item.startTime} น. - {item.endTime} น.</td>
+                    <td className="py-3 px-4 text-cyan-400 font-semibold flex items-center gap-2">
+                      {item.startTime} น. - {item.endTime} น. 
+                      {editingId === item.id && <span className="text-xs bg-amber-500 text-slate-950 px-2 py-0.5 rounded font-bold">กำลังแก้ไข</span>}
+                    </td>
                     <td className="py-3 px-4 font-bold">{item.limitPressure} Bar</td>
-                    <td className="py-3 px-4 text-center">
+                    <td className="py-3 px-4 text-center" onClick={(e) => e.stopPropagation()}>
                       {isAdminLoggedIn ? (
-                        <button 
-                          onClick={() => handleDeleteSchedule(item.id)}
-                          className="bg-red-500/20 hover:bg-red-500/30 text-red-400 p-2 rounded-lg transition-all cursor-pointer"
-                          title="ลบช่วงเวลานี้"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center justify-center gap-2">
+                          <button 
+                            onClick={() => handleRowDoubleClick(item)}
+                            className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 p-2 rounded-lg transition-all cursor-pointer"
+                            title="แก้ไขรายการนี้"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteSchedule(item.id)}
+                            className="bg-red-500/20 hover:bg-red-500/30 text-red-400 p-2 rounded-lg transition-all cursor-pointer"
+                            title="ลบช่วงเวลานี้"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       ) : (
                         <span className="text-xs text-slate-600">ต้องล็อกอินแอดมิน</span>
                       )}
@@ -513,7 +600,7 @@ export default function PumpDashboard() {
               ) : (
                 <tr>
                   <td colSpan="4" className="text-center py-6 text-slate-500">
-                    ยังไม่มีข้อมูลช่วงเวลาแรงดันที่ตั้งไว้
+                    ยังไม่มีข้อมูลช่วงเวลาแรงดันที่ตั้งไว้ (ดับเบิลคลิกที่ตารางหลังจากเพิ่มข้อมูลเพื่อแก้ไข)
                   </td>
                 </tr>
               )}
