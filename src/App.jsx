@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
 import { 
@@ -55,8 +55,9 @@ export default function PumpDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isOfflineOrPowerLoss, setIsOfflineOrPowerLoss] = useState(false);
 
-  // --- ระบบแจ้งเตือน (ควบคุมไม่ให้ซ้ำซ้อน และหายไปใน 1 นาที) ---
-  const [notifications, setNotifications] = useState([]);
+  // --- ระบบแจ้งเตือนเดี่ยว (ป้องกันการขึ้นทับกัน) ---
+  const [notification, setNotification] = useState(null);
+  const notifTimerRef = useRef(null);
 
   // --- ระบบแอดมิน ---
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
@@ -98,18 +99,21 @@ export default function PumpDashboard() {
     return pump.p3Setpoint ?? 1.2;
   };
 
-  // ฟังก์ชันเพิ่มแจ้งเตือนแบบไม่ซ้ำซ้อน
-  const addTimedNotification = (notif) => {
-    setNotifications(prev => {
-      // เช็กว่ามีข้อความแบบเดียวกันที่กำลังแสดงอยู่ไหม ถ้ามีให้ข้ามเพื่อไม่ให้ซ้ำซ้อน
-      const exists = prev.some(n => n.message === notif.message && n.title === notif.title);
-      if (exists) return prev;
-      return [notif, ...prev];
-    });
+  // ฟังก์ชันแสดงการแจ้งเตือน (ล้างอันเดิมทันที และแสดงอันใหม่โดยไม่อนุญาตให้ทับซ้อน)
+  const showNotification = (title, message, type, isAuto = false) => {
+    if (notifTimerRef.current) {
+      clearTimeout(notifTimerRef.current);
+      notifTimerRef.current = null;
+    }
 
-    setTimeout(() => {
-      setNotifications(prev => prev.filter(n => n.id !== notif.id));
-    }, 60000);
+    setNotification({ title, message, type });
+
+    // ถ้าเป็นโหมด AUTO หรือระบบออฟไลน์ ให้ตั้งเวลาปิดอัตโนมัติใน 1 นาที (60,000 ms)
+    if (isAuto) {
+      notifTimerRef.current = setTimeout(() => {
+        setNotification(null);
+      }, 60000);
+    }
   };
 
   // เช็กออฟไลน์ (เชื่อมต่ออินเตอร์เน็ทไม่ได้)
@@ -120,12 +124,7 @@ export default function PumpDashboard() {
         const offline = secondsElapsed > 300;
         setIsOfflineOrPowerLoss(offline);
         if (offline) {
-          addTimedNotification({
-            id: 'offline-alert',
-            title: 'การเชื่อมต่อระบบ',
-            message: 'เชื่อมต่ออินเตอร์เน็ทไม่ได้',
-            type: 'error'
-          });
+          showNotification('การเชื่อมต่อระบบ', 'เชื่อมต่ออินเตอร์เน็ทไม่ได้', 'error', true);
         }
       }
     }, 5000);
@@ -138,18 +137,14 @@ export default function PumpDashboard() {
     const unsubscribe = onValue(pumpsRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        // ตรวจจับการเปลี่ยนแปลงสถานะปั๊มเพื่อแจ้งเตือนเฉพาะเปิด/ปิด
         Object.entries(data).forEach(([key, newPump]) => {
           const oldPump = pumpsData[key];
           if (oldPump) {
             if (oldPump.status !== newPump.status) {
               const msg = newPump.status ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
-              addTimedNotification({
-                id: `${key}-${newPump.status}-${Date.now()}`,
-                title: newPump.name || key,
-                message: msg,
-                type: newPump.status ? 'success' : 'warning'
-              });
+              const isAutoMode = newPump.mode === 'AUTO';
+              // แจ้งเตือนตามสถานะทันทีโดยลบอันเก่าทิ้ง ไม่ให้ขึ้นทับกัน
+              showNotification(newPump.name || key, msg, newPump.status ? 'success' : 'warning', isAutoMode);
             }
           }
         });
@@ -213,6 +208,10 @@ export default function PumpDashboard() {
       const newStatus = !pumpStatus;
       setPumpStatus(newStatus);
       set(ref(db, getDbPath('status')), newStatus);
+
+      // แจ้งเตือนแบบแมนนวล: เปลี่ยนทันที ไม่ต้องรอ 1 นาที และลบข้อความเดิมทิ้งทันที
+      const msg = newStatus ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
+      showNotification(pumpsData[currentView]?.name || currentView, msg, newStatus ? 'success' : 'warning', false);
     } else {
       alert("ระบบอยู่ในโหมด AUTO ควบคุมด้วยแรงดัน ไม่สามารถกดเปิด-ปิดเองได้");
     }
@@ -266,35 +265,33 @@ export default function PumpDashboard() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans relative">
       
-      {/* --- Floating Notification Center (กระพริบและหายไปใน 1 นาที) --- */}
-      <div className="fixed top-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
-        {notifications.map((notif) => {
-          let bgColor = 'bg-slate-900 border-cyan-500 text-cyan-300';
-          if (notif.type === 'success') bgColor = 'bg-emerald-950/90 border-emerald-500 text-emerald-300';
-          if (notif.type === 'warning') bgColor = 'bg-amber-950/90 border-amber-500 text-amber-300';
-          if (notif.type === 'error') bgColor = 'bg-red-950/90 border-red-500 text-red-300';
+      {/* --- Floating Notification Banner (แสดงข้อความเดี่ยว ไม่ซ้ำซ้อน ไม่ทับกัน) --- */}
+      {notification && (
+        <div className="fixed top-6 right-6 z-50 max-w-sm w-full pointer-events-auto">
+          {(() => {
+            let bgColor = 'bg-slate-900 border-cyan-500 text-cyan-300';
+            if (notification.type === 'success') bgColor = 'bg-emerald-950/90 border-emerald-500 text-emerald-300';
+            if (notification.type === 'warning') bgColor = 'bg-amber-950/90 border-amber-500 text-amber-300';
+            if (notification.type === 'error') bgColor = 'bg-red-950/90 border-red-500 text-red-300';
 
-          return (
-            <div 
-              key={notif.id} 
-              className={`pointer-events-auto border-2 rounded-xl p-4 shadow-2xl backdrop-blur-md animate-pulse flex items-start gap-3 transition-all ${bgColor}`}
-            >
-              <Bell className="w-5 h-5 shrink-0 mt-0.5 animate-bounce" />
-              <div className="flex-1">
-                <h4 className="font-bold text-sm">{notif.title}</h4>
-                <p className="text-xs mt-0.5 opacity-90 font-semibold">{notif.message}</p>
-                <span className="text-[10px] opacity-70 mt-1 block">แจ้งเตือนชั่วคราว (หายไปใน 1 นาที)</span>
+            return (
+              <div className={`border-2 rounded-xl p-4 shadow-2xl backdrop-blur-md animate-pulse flex items-start gap-3 transition-all ${bgColor}`}>
+                <Bell className="w-5 h-5 shrink-0 mt-0.5 animate-bounce" />
+                <div className="flex-1">
+                  <h4 className="font-bold text-sm">{notification.title}</h4>
+                  <p className="text-xs mt-0.5 opacity-90 font-semibold">{notification.message}</p>
+                </div>
+                <button 
+                  onClick={() => setNotification(null)}
+                  className="text-white/60 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button 
-                onClick={() => setNotifications(prev => prev.filter(n => n.id !== notif.id))}
-                className="text-white/60 hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* --- Modal แอดมิน --- */}
       {showAuthModal && (
