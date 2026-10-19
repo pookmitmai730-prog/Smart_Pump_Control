@@ -55,7 +55,7 @@ export default function PumpDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isOfflineOrPowerLoss, setIsOfflineOrPowerLoss] = useState(false);
 
-  // --- ระบบแจ้งเตือน (จำกัดข้อความตามที่กำหนด และหายไปใน 1 นาที) ---
+  // --- ระบบแจ้งเตือน (ควบคุมไม่ให้ซ้ำซ้อน และหายไปใน 1 นาที) ---
   const [notifications, setNotifications] = useState([]);
 
   // --- ระบบแอดมิน ---
@@ -64,10 +64,44 @@ export default function PumpDashboard() {
   const [passcode, setPasscode] = useState('');
   const [loginError, setLoginError] = useState(false);
 
-  // ฟังก์ชันเพิ่มแจ้งเตือน (ลบอัตโนมัติใน 60 วินาที)
+  // ฟังก์ชันจัดรูปแบบทศนิยม 2 ตำแหน่ง (ปัดเศษมาตรฐาน ขึ้นถ้า >= 5 ลงถ้า < 5)
+  const formatPressure = (val) => {
+    if (val === undefined || val === null || isNaN(val)) return "0.00";
+    return (Math.round(val * 100) / 100).toFixed(2);
+  };
+
+  // ฟังก์ชันคำนวณหาค่า Setpoint จาก Schedules ของปั๊มแต่ละตัวแบบเรียลไทม์
+  const getPumpSetpoint = (pump) => {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const scheds = pump.schedules || [];
+    
+    if (scheds.length > 0) {
+      for (let sched of scheds) {
+        const [sH, sM] = sched.startTime.split(':').map(Number);
+        const [eH, eM] = sched.endTime.split(':').map(Number);
+        const startMin = sH * 60 + sM;
+        const endMin = eH * 60 + eM;
+        
+        let inRange = false;
+        if (startMin <= endMin) {
+          inRange = currentMinutes >= startMin && currentMinutes <= endMin;
+        } else {
+          inRange = currentMinutes >= startMin || currentMinutes <= endMin;
+        }
+        
+        if (inRange) {
+          return sched.limitPressure;
+        }
+      }
+    }
+    return pump.p3Setpoint ?? 1.2;
+  };
+
+  // ฟังก์ชันเพิ่มแจ้งเตือนแบบไม่ซ้ำซ้อน
   const addTimedNotification = (notif) => {
-    // ป้องกันการแสดงข้อความซ้ำติดๆ กันในเวลาไล่เลี่ยกัน
     setNotifications(prev => {
+      // เช็กว่ามีข้อความแบบเดียวกันที่กำลังแสดงอยู่ไหม ถ้ามีให้ข้ามเพื่อไม่ให้ซ้ำซ้อน
       const exists = prev.some(n => n.message === notif.message && n.title === notif.title);
       if (exists) return prev;
       return [notif, ...prev];
@@ -104,14 +138,14 @@ export default function PumpDashboard() {
     const unsubscribe = onValue(pumpsRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        // ตรวจจับการเปลี่ยนแปลงสถานะปั๊มเพื่อแจ้งเตือน
+        // ตรวจจับการเปลี่ยนแปลงสถานะปั๊มเพื่อแจ้งเตือนเฉพาะเปิด/ปิด
         Object.entries(data).forEach(([key, newPump]) => {
           const oldPump = pumpsData[key];
           if (oldPump) {
             if (oldPump.status !== newPump.status) {
               const msg = newPump.status ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
               addTimedNotification({
-                id: Date.now() + Math.random(),
+                id: `${key}-${newPump.status}-${Date.now()}`,
                 title: newPump.name || key,
                 message: msg,
                 type: newPump.status ? 'success' : 'warning'
@@ -132,32 +166,6 @@ export default function PumpDashboard() {
     return () => unsubscribe();
   }, [pumpsData]);
 
-  // คำนวณหาค่า SETPOINT (limitPressure) ของช่วงเวลาปัจจุบันอัตโนมัติ
-  const getActiveSetpoint = () => {
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    if (schedules && schedules.length > 0) {
-      for (let sched of schedules) {
-        const [sH, sM] = sched.startTime.split(':').map(Number);
-        const [eH, eM] = sched.endTime.split(':').map(Number);
-        const startMin = sH * 60 + sM;
-        const endMin = eH * 60 + eM;
-        
-        let inRange = false;
-        if (startMin <= endMin) {
-          inRange = currentMinutes >= startMin && currentMinutes <= endMin;
-        } else {
-          inRange = currentMinutes >= startMin || currentMinutes <= endMin;
-        }
-        
-        if (inRange) {
-          return sched.limitPressure;
-        }
-      }
-    }
-    return p3Setpoint; // ถ้าไม่อยู่ในช่วงเวลาใดให้ใช้ค่าตั้งต้น
-  };
-
   // เมื่อเปลี่ยนหน้าไปดูปั๊มตัวไหน ให้นำข้อมูลมาผูกเข้ากับ State หลัก
   useEffect(() => {
     if (currentView !== 'overview' && pumpsData[currentView]) {
@@ -165,7 +173,7 @@ export default function PumpDashboard() {
       setPumpStatus(p.status ?? false);
       setMode(p.mode ?? 'AUTO');
       setP3Actual(p.p3Actual ?? 0.0);
-      setP3Setpoint(p.p3Setpoint ?? 1.2);
+      setP3Setpoint(getPumpSetpoint(p));
       setCurrent(p.current ?? 0.0);
       setFrequency(p.frequency ?? 0);
       setTemperature(p.temperature ?? 0.0);
@@ -366,60 +374,63 @@ export default function PumpDashboard() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {Object.entries(pumpsData).map(([key, pump]) => (
-              <div 
-                key={key} 
-                onClick={() => setCurrentView(key)}
-                className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-2xl p-6 shadow-xl transition-all cursor-pointer group flex flex-col justify-between relative overflow-hidden"
-              >
-                <div className={`absolute top-0 left-0 right-0 h-1.5 ${pump.status ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></div>
+            {Object.entries(pumpsData).map(([key, pump]) => {
+              const currentSetpoint = getPumpSetpoint(pump);
+              return (
+                <div 
+                  key={key} 
+                  onClick={() => setCurrentView(key)}
+                  className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-2xl p-6 shadow-xl transition-all cursor-pointer group flex flex-col justify-between relative overflow-hidden"
+                >
+                  <div className={`absolute top-0 left-0 right-0 h-1.5 ${pump.status ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></div>
 
-                <div>
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <span className="text-xs text-cyan-400 font-semibold uppercase tracking-wider">{key.toUpperCase()}</span>
-                      <h3 className="text-lg font-bold text-white mt-0.5">{pump.name}</h3>
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <span className="text-xs text-cyan-400 font-semibold uppercase tracking-wider">{key.toUpperCase()}</span>
+                        <h3 className="text-lg font-bold text-white mt-0.5">{pump.name}</h3>
+                      </div>
+                      <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${pump.status ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                        {pump.status ? 'RUNNING' : 'STOPPED'}
+                      </span>
                     </div>
-                    <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${pump.status ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
-                      {pump.status ? 'RUNNING' : 'STOPPED'}
-                    </span>
+
+                    <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-4 grid grid-cols-2 gap-3 text-center">
+                      <div>
+                        <span className="text-[10px] text-slate-400 uppercase">แรงดันจริง (P3)</span>
+                        <span className="text-2xl font-extrabold text-cyan-400 block mt-0.5">{formatPressure(pump.p3Actual)}</span>
+                        <span className="text-[10px] text-slate-500">Bar</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 uppercase">ค่าเป้าหมาย (Setpoint)</span>
+                        <span className="text-2xl font-bold text-slate-200 block mt-0.5">{formatPressure(currentSetpoint)}</span>
+                        <span className="text-[10px] text-slate-500">Bar</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-4">
+                      <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
+                        <span>โหมด</span>
+                        <strong className="text-cyan-400 block mt-0.5">{pump.mode}</strong>
+                      </div>
+                      <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
+                        <span>ความถี่</span>
+                        <strong className="text-amber-400 block mt-0.5">{pump.frequency || 0} Hz</strong>
+                      </div>
+                      <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
+                        <span>กระแส</span>
+                        <strong className="text-slate-200 block mt-0.5">{(pump.current || 0).toFixed(1)} A</strong>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-4 grid grid-cols-2 gap-3 text-center">
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase">แรงดันจริง (P3)</span>
-                      <span className="text-2xl font-extrabold text-cyan-400 block mt-0.5">{(pump.p3Actual || 0).toFixed(3)}</span>
-                      <span className="text-[10px] text-slate-500">Bar</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase">ค่าเป้าหมาย (Setpoint)</span>
-                      <span className="text-2xl font-bold text-slate-200 block mt-0.5">{(pump.p3Setpoint || 0).toFixed(1)}</span>
-                      <span className="text-[10px] text-slate-500">Bar</span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-4">
-                    <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
-                      <span>โหมด</span>
-                      <strong className="text-cyan-400 block mt-0.5">{pump.mode}</strong>
-                    </div>
-                    <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
-                      <span>ความถี่</span>
-                      <strong className="text-amber-400 block mt-0.5">{pump.frequency || 0} Hz</strong>
-                    </div>
-                    <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
-                      <span>กระแส</span>
-                      <strong className="text-slate-200 block mt-0.5">{(pump.current || 0).toFixed(1)} A</strong>
-                    </div>
+                  <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-xs text-cyan-400 group-hover:text-cyan-300 font-semibold">
+                    <span>คลิกเพื่อเข้าไปจัดการตั้งค่า</span>
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </div>
                 </div>
-
-                <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-xs text-cyan-400 group-hover:text-cyan-300 font-semibold">
-                  <span>คลิกเพื่อเข้าไปจัดการตั้งค่า</span>
-                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -432,7 +443,7 @@ export default function PumpDashboard() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
 
-            {/* 1. แรงดันจริง P3 & Setpoint ตามช่วงเวลาจริง */}
+            {/* 1. แรงดันจริง P3 (ทศนิยม 2 ตำแหน่ง ปัดเศษมาตรฐาน) & Setpoint ตามช่วงเวลาจริง */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
@@ -441,13 +452,13 @@ export default function PumpDashboard() {
                 
                 <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-3 text-center relative">
                   <span className="text-slate-400 text-xs block uppercase tracking-wider">แรงดันจริง (P3 Actual)</span>
-                  <span className="text-4xl font-extrabold text-cyan-400 mt-1 block">{p3Actual.toFixed(3)}</span>
+                  <span className="text-4xl font-extrabold text-cyan-400 mt-1 block">{formatPressure(p3Actual)}</span>
                   <span className="text-xs text-slate-500">Bar</span>
                 </div>
 
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex justify-between items-center px-4">
                   <span className="text-xs text-slate-400">ค่าเป้าหมาย (Setpoint ปัจจุบัน):</span>
-                  <strong className="text-cyan-400 text-base">{getActiveSetpoint().toFixed(2)} Bar</strong>
+                  <strong className="text-cyan-400 text-base">{formatPressure(getPumpSetpoint(pumpsData[currentView]))} Bar</strong>
                 </div>
               </div>
 
