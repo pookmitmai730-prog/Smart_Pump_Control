@@ -22,7 +22,6 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 export default function PumpDashboard() {
-  // --- ระบบนำทางหน้า: 'overview' หรือเลือกเจาะจง 'pump1', 'pump2', 'pump3' ---
   const [currentView, setCurrentView] = useState('overview');
 
   // --- เก็บข้อมูลปั๊มทั้ง 3 จุด อิงโครงสร้าง JSON ใหม่ ---
@@ -32,7 +31,7 @@ export default function PumpDashboard() {
     pump3: { name: "จุดที่ 3: ธาตุพนมเหนือ", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } }
   });
 
-  // --- State ของปั๊มตัวที่กำลังเปิดดูในหน้าจัดการ ---
+  // --- State หน้า Detail ---
   const [pumpStatus, setPumpStatus] = useState(false); 
   const [mode, setMode] = useState('AUTO');              
   const [p3Actual, setP3Actual] = useState(0.0);        
@@ -56,7 +55,7 @@ export default function PumpDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isOfflineOrPowerLoss, setIsOfflineOrPowerLoss] = useState(false);
 
-  // --- ระบบแจ้งเตือนกระพริบและหายไปใน 1 นาที ---
+  // --- ระบบแจ้งเตือน (จำกัดข้อความตามที่กำหนด และหายไปใน 1 นาที) ---
   const [notifications, setNotifications] = useState([]);
 
   // --- ระบบแอดมิน ---
@@ -67,20 +66,35 @@ export default function PumpDashboard() {
 
   // ฟังก์ชันเพิ่มแจ้งเตือน (ลบอัตโนมัติใน 60 วินาที)
   const addTimedNotification = (notif) => {
-    setNotifications(prev => [notif, ...prev]);
+    // ป้องกันการแสดงข้อความซ้ำติดๆ กันในเวลาไล่เลี่ยกัน
+    setNotifications(prev => {
+      const exists = prev.some(n => n.message === notif.message && n.title === notif.title);
+      if (exists) return prev;
+      return [notif, ...prev];
+    });
+
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== notif.id));
     }, 60000);
   };
 
-  // เช็กออฟไลน์
+  // เช็กออฟไลน์ (เชื่อมต่ออินเตอร์เน็ทไม่ได้)
   useEffect(() => {
     const interval = setInterval(() => {
       if (lastUpdated) {
         const secondsElapsed = (Date.now() - lastUpdated) / 1000;
-        setIsOfflineOrPowerLoss(secondsElapsed > 300);
+        const offline = secondsElapsed > 300;
+        setIsOfflineOrPowerLoss(offline);
+        if (offline) {
+          addTimedNotification({
+            id: 'offline-alert',
+            title: 'การเชื่อมต่อระบบ',
+            message: 'เชื่อมต่ออินเตอร์เน็ทไม่ได้',
+            type: 'error'
+          });
+        }
       }
-    }, 3000);
+    }, 5000);
     return () => clearInterval(interval);
   }, [lastUpdated]);
 
@@ -90,24 +104,17 @@ export default function PumpDashboard() {
     const unsubscribe = onValue(pumpsRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        // ตรวจจับการเปลี่ยนแปลงสถานะหรือ Alarm เพื่อแจ้งเตือนชั่วคราว
+        // ตรวจจับการเปลี่ยนแปลงสถานะปั๊มเพื่อแจ้งเตือน
         Object.entries(data).forEach(([key, newPump]) => {
           const oldPump = pumpsData[key];
           if (oldPump) {
             if (oldPump.status !== newPump.status) {
+              const msg = newPump.status ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
               addTimedNotification({
                 id: Date.now() + Math.random(),
-                title: `แจ้งเตือนสถานะ (${newPump.name || key})`,
-                message: newPump.status ? 'ปั๊มเริ่มทำงานปกติ (RUNNING)' : 'ปั๊มหยุดการทำงาน (STOPPED)',
+                title: newPump.name || key,
+                message: msg,
                 type: newPump.status ? 'success' : 'warning'
-              });
-            }
-            if (newPump.alarm && oldPump.alarm !== newPump.alarm) {
-              addTimedNotification({
-                id: Date.now() + Math.random(),
-                title: `⚠️ แจ้งเตือนความผิดปกติ (${newPump.name || key})`,
-                message: newPump.alarm,
-                type: 'error'
               });
             }
           }
@@ -124,6 +131,32 @@ export default function PumpDashboard() {
 
     return () => unsubscribe();
   }, [pumpsData]);
+
+  // คำนวณหาค่า SETPOINT (limitPressure) ของช่วงเวลาปัจจุบันอัตโนมัติ
+  const getActiveSetpoint = () => {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    if (schedules && schedules.length > 0) {
+      for (let sched of schedules) {
+        const [sH, sM] = sched.startTime.split(':').map(Number);
+        const [eH, eM] = sched.endTime.split(':').map(Number);
+        const startMin = sH * 60 + sM;
+        const endMin = eH * 60 + eM;
+        
+        let inRange = false;
+        if (startMin <= endMin) {
+          inRange = currentMinutes >= startMin && currentMinutes <= endMin;
+        } else {
+          inRange = currentMinutes >= startMin || currentMinutes <= endMin;
+        }
+        
+        if (inRange) {
+          return sched.limitPressure;
+        }
+      }
+    }
+    return p3Setpoint; // ถ้าไม่อยู่ในช่วงเวลาใดให้ใช้ค่าตั้งต้น
+  };
 
   // เมื่อเปลี่ยนหน้าไปดูปั๊มตัวไหน ให้นำข้อมูลมาผูกเข้ากับ State หลัก
   useEffect(() => {
@@ -241,7 +274,7 @@ export default function PumpDashboard() {
               <Bell className="w-5 h-5 shrink-0 mt-0.5 animate-bounce" />
               <div className="flex-1">
                 <h4 className="font-bold text-sm">{notif.title}</h4>
-                <p className="text-xs mt-0.5 opacity-90">{notif.message}</p>
+                <p className="text-xs mt-0.5 opacity-90 font-semibold">{notif.message}</p>
                 <span className="text-[10px] opacity-70 mt-1 block">แจ้งเตือนชั่วคราว (หายไปใน 1 นาที)</span>
               </div>
               <button 
@@ -316,7 +349,7 @@ export default function PumpDashboard() {
       {isOfflineOrPowerLoss && (
         <div className="bg-red-500/20 border border-red-500 text-red-300 p-4 rounded-xl mb-6 flex items-center gap-3 animate-pulse">
           <WifiOff className="w-6 h-6 shrink-0 text-red-400" />
-          <div><strong>⚠️ แจ้งเตือนวิกฤต:</strong> ระบบขาดการติดต่อจากอุปกรณ์ (ไฟดับหรืออินเทอร์เน็ตหลุด)</div>
+          <div><strong>⚠️ แจ้งเตือน:</strong> เชื่อมต่ออินเตอร์เน็ทไม่ได้</div>
         </div>
       )}
 
@@ -379,13 +412,6 @@ export default function PumpDashboard() {
                       <strong className="text-slate-200 block mt-0.5">{(pump.current || 0).toFixed(1)} A</strong>
                     </div>
                   </div>
-
-                  {pump.alarm && (
-                    <div className="bg-amber-500/10 border border-amber-500/40 text-amber-400 text-xs p-2.5 rounded-lg mb-4 flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4 shrink-0" />
-                      <span className="truncate">{pump.alarm}</span>
-                    </div>
-                  )}
                 </div>
 
                 <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-xs text-cyan-400 group-hover:text-cyan-300 font-semibold">
@@ -403,17 +429,10 @@ export default function PumpDashboard() {
       {/* ======================================================== */}
       {currentView !== 'overview' && (
         <div className="space-y-6">
-          
-          {alarm && (
-            <div className="bg-amber-500/10 border border-amber-500/50 text-amber-400 p-4 rounded-xl flex items-center gap-3 animate-pulse">
-              <AlertTriangle className="w-6 h-6 shrink-0" />
-              <span><strong>แจ้งเตือนสถานะการทำงาน:</strong> {alarm}</span>
-            </div>
-          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
 
-            {/* 1. แรงดันจริง P3 */}
+            {/* 1. แรงดันจริง P3 & Setpoint ตามช่วงเวลาจริง */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
@@ -427,8 +446,8 @@ export default function PumpDashboard() {
                 </div>
 
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex justify-between items-center px-4">
-                  <span className="text-xs text-slate-400">แรงดันเป้าหมาย (Setpoint):</span>
-                  <strong className="text-cyan-400 text-base">{p3Setpoint.toFixed(1)} Bar</strong>
+                  <span className="text-xs text-slate-400">ค่าเป้าหมาย (Setpoint ปัจจุบัน):</span>
+                  <strong className="text-cyan-400 text-base">{getActiveSetpoint().toFixed(2)} Bar</strong>
                 </div>
               </div>
 
