@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
 import { 
   Activity, Power, Sliders, Thermometer, 
-  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings, Edit3, ArrowRight, ChevronLeft
+  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings, Edit3, ArrowRight, ChevronLeft, Bell
 } from 'lucide-react';
 
 // --- ค่ากำหนด Firebase ---
@@ -32,7 +32,7 @@ export default function PumpDashboard() {
     pump3: { name: "จุดที่ 3: สถานีสำรอง 2", status: false, mode: 'AUTO', p3Actual: 0.0, current: 0.0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 60, restartMinPressure: 2.5 } }
   });
 
-  // --- State ของปั๊มตัวที่กำลังเปิดดูในหน้าจัดการ (เพื่อให้เข้ากันกับโค้ดเดิมของคุณ) ---
+  // --- State ของปั๊มตัวที่กำลังเปิดดูในหน้าจัดการ ---
   const [pumpStatus, setPumpStatus] = useState(false); 
   const [mode, setMode] = useState('AUTO');              
   const [p3Actual, setP3Actual] = useState(0.0);        
@@ -55,11 +55,22 @@ export default function PumpDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isOfflineOrPowerLoss, setIsOfflineOrPowerLoss] = useState(false);
 
+  // --- ⚡ เพิ่มเฉพาะ: State สำหรับป้ายแจ้งเตือนกระพริบและหายไปใน 1 นาที ---
+  const [notifications, setNotifications] = useState([]);
+
   // --- State สำหรับระบบล็อกอินแอดมิน ---
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [passcode, setPasscode] = useState('');
   const [loginError, setLoginError] = useState(false);
+
+  // --- ⚡ เพิ่มเฉพาะ: ฟังก์ชันเพิ่มแจ้งเตือนที่จะหายไปใน 60 วินาที (1 นาที) ---
+  const addTimedNotification = (notif) => {
+    setNotifications(prev => [notif, ...prev]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== notif.id));
+    }, 60000); // 60 วินาที
+  };
 
   // --- ตรวจสอบสถานะข้อมูลขาดหาย (เกิน 300 วินาที) ---
   useEffect(() => {
@@ -72,13 +83,35 @@ export default function PumpDashboard() {
     return () => clearInterval(interval);
   }, [lastUpdated]);
 
-  // --- ดึงข้อมูลแบบ Real-time ทั้งหมดจาก Firebase (รองรับโครงสร้างเดิมแบบ root: pumps หรือ pumpSystem) ---
+  // --- ดึงข้อมูลแบบ Real-time ทั้งหมดจาก Firebase (โครงสร้างเดิม 100%) ---
   useEffect(() => {
-    // รองรับทั้งแบบแยกปั๊ม (/pumps) และแบบเดิมห้องเดี่ยว (/pumpSystem) เพื่อความปลอดภัยไม่ให้ข้อมูลเดิมหาย
     const rootRef = ref(db, 'pumps');
     const unsubscribePumps = onValue(rootRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
+        // ⚡ เพิ่มเฉพาะ: ตรวจจับการเปลี่ยนสถานะหรือ Alarm เพื่อสร้างการแจ้งเตือนกระพริบ 1 นาที
+        Object.entries(data).forEach(([key, newPump]) => {
+          const oldPump = pumpsData[key];
+          if (oldPump) {
+            if (oldPump.status !== newPump.status) {
+              addTimedNotification({
+                id: Date.now() + Math.random(),
+                title: `แจ้งเตือนสถานะ (${newPump.name || key})`,
+                message: newPump.status ? 'ปั๊มเริ่มทำงานปกติ (RUNNING)' : 'ปั๊มหยุดการทำงาน (STOPPED)',
+                type: newPump.status ? 'success' : 'warning'
+              });
+            }
+            if (newPump.alarm && oldPump.alarm !== newPump.alarm) {
+              addTimedNotification({
+                id: Date.now() + Math.random(),
+                title: `⚠️ แจ้งเตือนความผิดปกติ (${newPump.name || key})`,
+                message: newPump.alarm,
+                type: 'error'
+              });
+            }
+          }
+        });
+
         setPumpsData(prev => ({
           pump1: data.pump1 || prev.pump1,
           pump2: data.pump2 || prev.pump2,
@@ -88,7 +121,6 @@ export default function PumpDashboard() {
       }
     });
 
-    // ดึงแบบโครงสร้างเดิมเดี่ยวๆ ด้วย (เผื่อระบบเดิมเก็บไว้ที่ /pumpSystem สำหรับปั๊มตัวแรก)
     const singlePumpRef = ref(db, 'pumpSystem');
     const unsubscribeSingle = onValue(singlePumpRef, (snapshot) => {
       const data = snapshot.val();
@@ -114,7 +146,7 @@ export default function PumpDashboard() {
       unsubscribePumps();
       unsubscribeSingle();
     };
-  }, []);
+  }, [pumpsData]);
 
   // เมื่อผู้ใช้เลือกคลิกดูปั๊มตัวไหน ให้นำข้อมูลของปั๊มตัวนั้นมาผูกเข้ากับ State เดิมของคุณ
   useEffect(() => {
@@ -147,12 +179,11 @@ export default function PumpDashboard() {
     }
   };
 
-  // --- ฟังก์ชันควบคุมโหมดและปั๊ม (ตามปั๊มที่เลือกดูอยู่) ---
+  // --- ฟังก์ชันควบคุมโหมดและปั๊ม ---
   const handleModeToggle = () => {
     if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
     const newMode = mode === 'AUTO' ? 'MANUAL' : 'AUTO';
     setMode(newMode);
-    // บันทึกลง Firebase ตาม Path ของปั๊มตัวนั้นๆ (รองรับทั้ง /pumps/{currentView} และ /pumpSystem ถ้าเป็น pump1)
     set(ref(db, `pumps/${currentView}/mode`), newMode);
     if (currentView === 'pump1') {
       set(ref(db, 'pumpSystem/mode'), newMode);
@@ -173,7 +204,7 @@ export default function PumpDashboard() {
     }
   };
 
-  // --- ฟังก์ชันจัดการตารางช่วงเวลาแรงดัน (โครงสร้างเดิมของคุณ + รองรับ Double Click) ---
+  // --- ฟังก์ชันจัดการตารางช่วงเวลาแรงดัน ---
   const handleAddOrUpdateSchedule = () => {
     let updatedSchedules;
     if (editingId !== null) {
@@ -218,7 +249,7 @@ export default function PumpDashboard() {
     if (editingId === id) handleCancelEdit();
   };
 
-  // --- ฟังก์ชันบันทึกค่า Config (โครงสร้างเดิมของคุณ) ---
+  // --- ฟังก์ชันบันทึกค่า Config ---
   const handleSaveRestartConfig = () => {
     if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
     const configData = { restartDelay: parseInt(restartDelay), restartMinPressure: parseFloat(restartMinPressure) };
@@ -232,6 +263,36 @@ export default function PumpDashboard() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans relative">
       
+      {/* ⚡ เพิ่มเฉพาะ: ป้ายแจ้งเตือนลอยมุมขวาบน (กระพริบ + หายไปใน 1 นาที) */}
+      <div className="fixed top-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
+        {notifications.map((notif) => {
+          let bgColor = 'bg-slate-900 border-cyan-500 text-cyan-300';
+          if (notif.type === 'success') bgColor = 'bg-emerald-950/90 border-emerald-500 text-emerald-300';
+          if (notif.type === 'warning') bgColor = 'bg-amber-950/90 border-amber-500 text-amber-300';
+          if (notif.type === 'error') bgColor = 'bg-red-950/90 border-red-500 text-red-300';
+
+          return (
+            <div 
+              key={notif.id} 
+              className={`pointer-events-auto border-2 rounded-xl p-4 shadow-2xl backdrop-blur-md animate-pulse flex items-start gap-3 transition-all ${bgColor}`}
+            >
+              <Bell className="w-5 h-5 shrink-0 mt-0.5 animate-bounce" />
+              <div className="flex-1">
+                <h4 className="font-bold text-sm">{notif.title}</h4>
+                <p className="text-xs mt-0.5 opacity-90">{notif.message}</p>
+                <span className="text-[10px] opacity-70 mt-1 block">แจ้งเตือนชั่วคราว (หายไปใน 1 นาที)</span>
+              </div>
+              <button 
+                onClick={() => setNotifications(prev => prev.filter(n => n.id !== notif.id))}
+                className="text-white/60 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
       {/* --- Modal ใส่รหัสผ่านแอดมิน --- */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -298,7 +359,7 @@ export default function PumpDashboard() {
       )}
 
       {/* ======================================================== */}
-      {/* 🟢 หน้าหลัก (Overview): แสดงปั๊มทั้ง 3 จุด พร้อมแรงดันปลายสายออนไลน์ */}
+      {/* 🟢 หน้าหลัก (Overview) */}
       {/* ======================================================== */}
       {currentView === 'overview' && (
         <div>
@@ -316,7 +377,6 @@ export default function PumpDashboard() {
                 onClick={() => setCurrentView(key)}
                 className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-2xl p-6 shadow-xl transition-all cursor-pointer group flex flex-col justify-between relative overflow-hidden"
               >
-                {/* แถบสถานะด้านบน */}
                 <div className={`absolute top-0 left-0 right-0 h-1.5 ${pump.status ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></div>
 
                 <div>
@@ -330,7 +390,6 @@ export default function PumpDashboard() {
                     </span>
                   </div>
 
-                  {/* ⚡ จุดสำคัญ: แสดงค่าแรงดันปลายสายออนไลน์ (P3) ที่หน้าหลักทันที */}
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-4 text-center">
                     <span className="text-slate-400 text-xs block uppercase tracking-wider">แรงดันปลายสายออนไลน์ (P3)</span>
                     <span className="text-4xl font-extrabold text-cyan-400 mt-1 block">{(pump.p3Actual || 0).toFixed(2)}</span>
@@ -367,7 +426,7 @@ export default function PumpDashboard() {
       )}
 
       {/* ======================================================== */}
-      {/* ⚙️ หน้าจัดการเดิม (Detail View): แสดงโครงสร้างหน้าเดิมครบถ้วน */}
+      {/* ⚙️ หน้าจัดการเดิม (Detail View) */}
       {/* ======================================================== */}
       {currentView !== 'overview' && (
         <div className="space-y-6">
@@ -379,10 +438,9 @@ export default function PumpDashboard() {
             </div>
           )}
 
-          {/* --- Main Grid (โครงสร้างเดิมของคุณ) --- */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
 
-            {/* 1. แสดงแรงดันจริง P3 & เวลาล่าสุด */}
+            {/* 1. แสดงแรงดันจริง P3 */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
@@ -405,7 +463,7 @@ export default function PumpDashboard() {
               </div>
             </div>
 
-            {/* 2. สั่งงานเปิด-ปิดออนไลน์ (Manual Control) */}
+            {/* 2. สั่งงานเปิด-ปิดออนไลน์ */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
@@ -478,7 +536,7 @@ export default function PumpDashboard() {
 
           </div>
 
-          {/* --- ส่วนตั้งค่า Restart Configuration (โครงสร้างเดิมของคุณ) --- */}
+          {/* --- ส่วนตั้งค่า Restart Configuration --- */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl mb-6">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
@@ -506,7 +564,7 @@ export default function PumpDashboard() {
             </div>
           </div>
 
-          {/* --- ส่วนตั้งค่าช่วงเวลาและขีดจำกัดแรงดัน (โครงสร้างเดิมของคุณ + Double Click) --- */}
+          {/* --- ส่วนตั้งค่าช่วงเวลาและขีดจำกัดแรงดัน --- */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
@@ -544,7 +602,6 @@ export default function PumpDashboard() {
               </div>
             )}
 
-            {/* ตารางแสดงรายการช่วงเวลา */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm text-slate-300">
                 <thead className="bg-slate-950 text-slate-400 uppercase text-xs border-b border-slate-800">
