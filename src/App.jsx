@@ -55,9 +55,10 @@ export default function PumpDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isOfflineOrPowerLoss, setIsOfflineOrPowerLoss] = useState(false);
 
-  // --- ระบบแจ้งเตือนเดี่ยว (ป้องกันการขึ้นทับกัน) ---
+  // --- ระบบแจ้งเตือนเดี่ยว (ป้องกันการขึ้นทับซ้อน) ---
   const [notification, setNotification] = useState(null);
   const notifTimerRef = useRef(null);
+  const lastStatusRef = useRef({});
 
   // --- ระบบแอดมิน ---
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
@@ -99,7 +100,7 @@ export default function PumpDashboard() {
     return pump.p3Setpoint ?? 1.2;
   };
 
-  // ฟังก์ชันแสดงการแจ้งเตือน (ล้างอันเดิมทันที และแสดงอันใหม่โดยไม่อนุญาตให้ทับซ้อน)
+  // ฟังก์ชันแสดงการแจ้งเตือน (ล้างอันเดิมทิ้งทันที)
   const showNotification = (title, message, type, isAuto = false) => {
     if (notifTimerRef.current) {
       clearTimeout(notifTimerRef.current);
@@ -108,7 +109,6 @@ export default function PumpDashboard() {
 
     setNotification({ title, message, type });
 
-    // ถ้าเป็นโหมด AUTO หรือระบบออฟไลน์ ให้ตั้งเวลาปิดอัตโนมัติใน 1 นาที (60,000 ms)
     if (isAuto) {
       notifTimerRef.current = setTimeout(() => {
         setNotification(null);
@@ -138,15 +138,14 @@ export default function PumpDashboard() {
       const data = snapshot.val();
       if (data) {
         Object.entries(data).forEach(([key, newPump]) => {
-          const oldPump = pumpsData[key];
-          if (oldPump) {
-            if (oldPump.status !== newPump.status) {
-              const msg = newPump.status ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
-              const isAutoMode = newPump.mode === 'AUTO';
-              // แจ้งเตือนตามสถานะทันทีโดยลบอันเก่าทิ้ง ไม่ให้ขึ้นทับกัน
-              showNotification(newPump.name || key, msg, newPump.status ? 'success' : 'warning', isAutoMode);
-            }
+          const currentPumpStatus = newPump.status ?? false;
+          const isAutoMode = newPump.mode === 'AUTO';
+
+          if (lastStatusRef.current[key] !== undefined && lastStatusRef.current[key] !== currentPumpStatus) {
+            const msg = currentPumpStatus ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
+            showNotification(newPump.name || key, msg, currentPumpStatus ? 'success' : 'warning', isAutoMode);
           }
+          lastStatusRef.current[key] = currentPumpStatus;
         });
 
         setPumpsData(prev => ({
@@ -159,7 +158,7 @@ export default function PumpDashboard() {
     });
 
     return () => unsubscribe();
-  }, [pumpsData]);
+  }, []);
 
   // เมื่อเปลี่ยนหน้าไปดูปั๊มตัวไหน ให้นำข้อมูลมาผูกเข้ากับ State หลัก
   useEffect(() => {
@@ -209,7 +208,8 @@ export default function PumpDashboard() {
       setPumpStatus(newStatus);
       set(ref(db, getDbPath('status')), newStatus);
 
-      // แจ้งเตือนแบบแมนนวล: เปลี่ยนทันที ไม่ต้องรอ 1 นาที และลบข้อความเดิมทิ้งทันที
+      lastStatusRef.current[currentView] = newStatus;
+
       const msg = newStatus ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
       showNotification(pumpsData[currentView]?.name || currentView, msg, newStatus ? 'success' : 'warning', false);
     } else {
@@ -255,17 +255,28 @@ export default function PumpDashboard() {
     if (editingId === id) handleCancelEdit();
   };
 
+  // --- ฟังก์ชันบันทึกค่า Config แรงดันขั้นต่ำและเวลาหน่วง ---
   const handleSaveRestartConfig = () => {
     if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
-    const configData = { restartDelay: parseInt(restartDelay), restartMinPressure: parseFloat(restartMinPressure) };
-    set(ref(db, getDbPath('config')), configData);
-    alert("บันทึกการตั้งค่าเรียบร้อยแล้ว!");
+    
+    const configData = { 
+      restartDelay: parseInt(restartDelay) || 5, 
+      restartMinPressure: parseFloat(restartMinPressure) || 0.2 
+    };
+
+    set(ref(db, getDbPath('config')), configData)
+      .then(() => {
+        alert("บันทึกการตั้งค่าแรงดันขั้นต่ำและเวลาหน่วงเรียบร้อยแล้ว!");
+      })
+      .catch((error) => {
+        alert("เกิดข้อผิดพลาดในการบันทึก: " + error.message);
+      });
   };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans relative">
       
-      {/* --- Floating Notification Banner (แสดงข้อความเดี่ยว ไม่ซ้ำซ้อน ไม่ทับกัน) --- */}
+      {/* --- Floating Notification Banner --- */}
       {notification && (
         <div className="fixed top-6 right-6 z-50 max-w-sm w-full pointer-events-auto">
           {(() => {
@@ -440,7 +451,7 @@ export default function PumpDashboard() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
 
-            {/* 1. แรงดันจริง P3 (ทศนิยม 2 ตำแหน่ง ปัดเศษมาตรฐาน) & Setpoint ตามช่วงเวลาจริง */}
+            {/* 1. แรงดันจริง P3 & Setpoint ตามช่วงเวลาจริง */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
@@ -527,27 +538,49 @@ export default function PumpDashboard() {
 
           </div>
 
-          {/* --- ตั้งค่า Restart Configuration --- */}
+          {/* --- ตั้งค่า Restart Configuration (เปิดแก้ไขได้เมื่อล็อกอินแอดมิน) --- */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl mb-6">
             <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-1">
               <Settings className="w-5 h-5" /> ตั้งค่าเริ่มต้นหลังจากปั๊มหยุดทำงาน (Restart Configuration)
             </h2>
-            <p className="text-slate-400 text-xs mb-4">กำหนดระยะเวลาหน่วงก่อนเริ่มใหม่และค่าแรงดันขั้นต่ำ</p>
+            <p className="text-slate-400 text-xs mb-4">กำหนดระยะเวลาหน่วงก่อนเริ่มใหม่และค่าแรงดันขั้นต่ำเพื่ออนุญาตให้ปั๊มสตาร์ทกลับมาอีกครั้ง</p>
 
             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
               <div>
                 <label className="text-xs text-slate-400 block mb-1">หน่วงเวลาก่อนเริ่มใหม่ (วินาที)</label>
-                <input type="number" value={restartDelay} onChange={(e) => setRestartDelay(e.target.value)} disabled={!isAdminLoggedIn} className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm disabled:opacity-50" />
+                <input 
+                  type="number" 
+                  value={restartDelay} 
+                  onChange={(e) => setRestartDelay(e.target.value)} 
+                  disabled={!isAdminLoggedIn} 
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm disabled:opacity-50 focus:outline-none focus:border-cyan-400" 
+                />
               </div>
+
               <div>
                 <label className="text-xs text-slate-400 block mb-1">แรงดันขั้นต่ำอนุญาตสตาร์ท (Bar)</label>
-                <input type="number" step="0.1" value={restartMinPressure} onChange={(e) => setRestartMinPressure(e.target.value)} disabled={!isAdminLoggedIn} className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm disabled:opacity-50" />
+                <input 
+                  type="number" 
+                  step="0.1" 
+                  value={restartMinPressure} 
+                  onChange={(e) => setRestartMinPressure(e.target.value)} 
+                  disabled={!isAdminLoggedIn} 
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm disabled:opacity-50 focus:outline-none focus:border-cyan-400" 
+                />
               </div>
+
               <div>
                 {isAdminLoggedIn ? (
-                  <button onClick={handleSaveRestartConfig} className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold py-2 rounded-lg text-sm cursor-pointer h-10">บันทึกค่ากำหนด</button>
+                  <button 
+                    onClick={handleSaveRestartConfig} 
+                    className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold py-2 rounded-lg text-sm cursor-pointer h-10 flex items-center justify-center transition-all"
+                  >
+                    บันทึกค่ากำหนด
+                  </button>
                 ) : (
-                  <div className="text-center text-xs text-slate-500 bg-slate-900 border border-slate-800 p-2.5 rounded-lg h-10 flex items-center justify-center">🔒 ต้องล็อกอินแอดมิน</div>
+                  <div className="text-center text-xs text-slate-500 bg-slate-900 border border-slate-800 p-2.5 rounded-lg h-10 flex items-center justify-center">
+                    🔒 ต้องล็อกอินแอดมินก่อนแก้ไข
+                  </div>
                 )}
               </div>
             </div>
