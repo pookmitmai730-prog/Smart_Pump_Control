@@ -24,11 +24,11 @@ const db = getDatabase(app);
 export default function PumpDashboard() {
   const [currentView, setCurrentView] = useState('overview');
 
-  // --- เก็บข้อมูลปั๊มทั้ง 3 จุด อิงโครงสร้าง JSON ใหม่ ---
+  // --- เก็บข้อมูลปั๊มทั้ง 3 จุด (กำหนดชื่อสถานที่ตั้งต้นไว้ที่นี่) ---
   const [pumpsData, setPumpsData] = useState({
-    pump1: { name: "จุดที่ 1: บ้านไผ่ล้อม", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } },
-    pump2: { name: "จุดที่ 2: โนนตาล", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } },
-    pump3: { name: "จุดที่ 3: ธาตุพนมเหนือ", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } }
+    pump1: { name: "บ้านไผ่ล้อม", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } },
+    pump2: { name: "โนนตาล", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } },
+    pump3: { name: "บ้านคำพอก", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } }
   });
 
   // --- State หน้า Detail ---
@@ -66,7 +66,7 @@ export default function PumpDashboard() {
   const [passcode, setPasscode] = useState('');
   const [loginError, setLoginError] = useState(false);
 
-  // ฟังก์ชันจัดรูปแบบทศนิยม 2 ตำแหน่ง (ปัดเศษมาตรฐาน ขึ้นถ้า >= 5 ลงถ้า < 5)
+  // ฟังก์ชันจัดรูปแบบทศนิยม 2 ตำแหน่ง
   const formatPressure = (val) => {
     if (val === undefined || val === null || isNaN(val)) return "0.00";
     return (Math.round(val * 100) / 100).toFixed(2);
@@ -100,7 +100,7 @@ export default function PumpDashboard() {
     return pump.p3Setpoint ?? 1.2;
   };
 
-  // ฟังก์ชันแสดงการแจ้งเตือน (ล้างอันเดิมทิ้งทันที)
+  // ฟังก์ชันแสดงการแจ้งเตือน
   const showNotification = (title, message, type, isAuto = false) => {
     if (notifTimerRef.current) {
       clearTimeout(notifTimerRef.current);
@@ -116,7 +116,7 @@ export default function PumpDashboard() {
     }
   };
 
-  // เช็กออฟไลน์ (เชื่อมต่ออินเตอร์เน็ทไม่ได้)
+  // เช็กออฟไลน์
   useEffect(() => {
     const interval = setInterval(() => {
       if (lastUpdated) {
@@ -148,10 +148,11 @@ export default function PumpDashboard() {
           lastStatusRef.current[key] = currentPumpStatus;
         });
 
+        // 🟢 ล็อกชื่อสถานที่ (name) ไว้ไม่ให้หายไปเวลารับข้อมูลจาก Firebase
         setPumpsData(prev => ({
-          pump1: data.pump1 || prev.pump1,
-          pump2: data.pump2 || prev.pump2,
-          pump3: data.pump3 || prev.pump3,
+          pump1: { ...prev.pump1, ...(data.pump1 || {}), name: prev.pump1.name },
+          pump2: { ...prev.pump2, ...(data.pump2 || {}), name: prev.pump2.name },
+          pump3: { ...prev.pump3, ...(data.pump3 || {}), name: prev.pump3.name },
         }));
         setLastUpdated(Date.now());
       }
@@ -255,7 +256,6 @@ export default function PumpDashboard() {
     if (editingId === id) handleCancelEdit();
   };
 
-  // --- ฟังก์ชันบันทึกค่า Config แรงดันขั้นต่ำและเวลาหน่วง ---
   const handleSaveRestartConfig = () => {
     if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
     
@@ -395,8 +395,11 @@ export default function PumpDashboard() {
                   <div>
                     <div className="flex justify-between items-start mb-4">
                       <div>
-                        <span className="text-xs text-cyan-400 font-semibold uppercase tracking-wider">{key.toUpperCase()}</span>
-                        <h3 className="text-lg font-bold text-white mt-0.5">{pump.name}</h3>
+                        {/* แสดงชื่อสถานที่ (เช่น PUMP1 : จุดที่ 1: บ้านไผ่ล้อม) */}
+                        <span className="text-xs text-cyan-400 font-semibold uppercase tracking-wider">
+                          {key.toUpperCase()} : {pump.name}
+                        </span>
+                        <h3 className="text-lg font-bold text-white mt-0.5">สถานีบูสเตอร์ปั๊ม</h3>
                       </div>
                       <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${pump.status ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
                         {pump.status ? 'RUNNING' : 'STOPPED'}
@@ -455,7 +458,7 @@ export default function PumpDashboard() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
-                  <Sliders className="w-5 h-5" /> แรงดันปลายสาย ({pumpsData[currentView]?.name})
+                  <Sliders className="w-5 h-5" /> แรงดันปลายสาย ({currentView.toUpperCase()} : {pumpsData[currentView]?.name})
                 </h2>
                 
                 <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-3 text-center relative">
@@ -480,7 +483,7 @@ export default function PumpDashboard() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-4">
-                  <Power className="w-5 h-5" /> ควบคุมปั๊มออนไลน์ (Online Switch)
+                  <Power className="w-5 h-5" /> ควบคุมปั๊มออนไลน์ ({currentView.toUpperCase()})
                 </h2>
 
                 <div className="flex flex-col items-center justify-center my-4">
@@ -538,7 +541,7 @@ export default function PumpDashboard() {
 
           </div>
 
-          {/* --- ตั้งค่า Restart Configuration (เปิดแก้ไขได้เมื่อล็อกอินแอดมิน) --- */}
+          {/* --- ตั้งค่า Restart Configuration --- */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl mb-6">
             <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-1">
               <Settings className="w-5 h-5" /> ตั้งค่าเริ่มต้นหลังจากปั๊มหยุดทำงาน (Restart Configuration)
