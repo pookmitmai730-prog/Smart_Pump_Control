@@ -183,7 +183,7 @@ export default function PumpDashboard() {
 
   const handleAdminLogin = (e) => {
     e.preventDefault();
-    if (passcode === '1234') {
+    if (passcode === '12348') {
       setIsAdminLoggedIn(true);
       setShowAuthModal(false);
       setPasscode('');
