@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
 import { 
   Activity, Power, Sliders, Thermometer, 
-  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings, Edit3, ArrowRight, ChevronLeft, Zap, Bell
+  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings, Edit3, ArrowRight, ChevronLeft, Zap, Wifi
 } from 'lucide-react';
 
 // --- ค่ากำหนด Firebase ---
@@ -31,6 +31,14 @@ export default function PumpDashboard() {
     pump3: { name: "บ้านคำพอก", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } }
   });
 
+  // --- เก็บเวลาอัปเดตล่าสุดของแต่ละปั๊ม เพื่อเช็กสถานะอินเตอร์เน็ต ---
+  const [pumpLastSeen, setPumpLastSeen] = useState({
+    pump1: Date.now(),
+    pump2: Date.now(),
+    pump3: Date.now()
+  });
+  const [, setTick] = useState(0);
+
   // --- State หน้า Detail ---
   const [pumpStatus, setPumpStatus] = useState(false); 
   const [mode, setMode] = useState('AUTO');              
@@ -54,11 +62,6 @@ export default function PumpDashboard() {
 
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isOfflineOrPowerLoss, setIsOfflineOrPowerLoss] = useState(false);
-
-  // --- ระบบแจ้งเตือนเดี่ยว (ป้องกันการขึ้นทับซ้อน) ---
-  const [notification, setNotification] = useState(null);
-  const notifTimerRef = useRef(null);
-  const lastStatusRef = useRef({});
 
   // --- ระบบแอดมิน ---
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
@@ -100,32 +103,21 @@ export default function PumpDashboard() {
     return pump.p3Setpoint ?? 1.2;
   };
 
-  // ฟังก์ชันแสดงการแจ้งเตือน
-  const showNotification = (title, message, type, isAuto = false) => {
-    if (notifTimerRef.current) {
-      clearTimeout(notifTimerRef.current);
-      notifTimerRef.current = null;
-    }
+  // Timer สำหรับอัปเดตหน้าจอทุกๆ 5 วินาที เพื่อเช็กสถานะอินเตอร์เน็ตสดๆ
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick(prev => prev + 1);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
 
-    setNotification({ title, message, type });
-
-    if (isAuto) {
-      notifTimerRef.current = setTimeout(() => {
-        setNotification(null);
-      }, 60000);
-    }
-  };
-
-  // เช็กออฟไลน์
+  // เช็กออฟไลน์รวมของระบบ
   useEffect(() => {
     const interval = setInterval(() => {
       if (lastUpdated) {
         const secondsElapsed = (Date.now() - lastUpdated) / 1000;
         const offline = secondsElapsed > 300;
         setIsOfflineOrPowerLoss(offline);
-        if (offline) {
-          showNotification('การเชื่อมต่อระบบ', 'เชื่อมต่ออินเตอร์เน็ทไม่ได้', 'error', true);
-        }
       }
     }, 5000);
     return () => clearInterval(interval);
@@ -137,24 +129,20 @@ export default function PumpDashboard() {
     const unsubscribe = onValue(pumpsRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        Object.entries(data).forEach(([key, newPump]) => {
-          const currentPumpStatus = newPump.status ?? false;
-          const isAutoMode = newPump.mode === 'AUTO';
+        const now = Date.now();
+        setPumpLastSeen(prev => ({
+          pump1: data.pump1 ? now : prev.pump1,
+          pump2: data.pump2 ? now : prev.pump2,
+          pump3: data.pump3 ? now : prev.pump3,
+        }));
 
-          if (lastStatusRef.current[key] !== undefined && lastStatusRef.current[key] !== currentPumpStatus) {
-            const msg = currentPumpStatus ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
-            showNotification(newPump.name || key, msg, currentPumpStatus ? 'success' : 'warning', isAutoMode);
-          }
-          lastStatusRef.current[key] = currentPumpStatus;
-        });
-
-        // 🟢 ล็อกชื่อสถานที่ (name) ไว้ไม่ให้หายไปเวลารับข้อมูลจาก Firebase
+        // ล็อกชื่อสถานที่ (name) ไว้ไม่ให้หายไปเวลารับข้อมูลจาก Firebase
         setPumpsData(prev => ({
           pump1: { ...prev.pump1, ...(data.pump1 || {}), name: prev.pump1.name },
           pump2: { ...prev.pump2, ...(data.pump2 || {}), name: prev.pump2.name },
           pump3: { ...prev.pump3, ...(data.pump3 || {}), name: prev.pump3.name },
         }));
-        setLastUpdated(Date.now());
+        setLastUpdated(now);
       }
     });
 
@@ -181,9 +169,10 @@ export default function PumpDashboard() {
     }
   }, [currentView, pumpsData]);
 
+  // 🔑 เปลี่ยนรหัสผ่าน Admin ตรงนี้ ('1234')
   const handleAdminLogin = (e) => {
     e.preventDefault();
-    if (passcode === '12348') {
+    if (passcode === '1234') {
       setIsAdminLoggedIn(true);
       setShowAuthModal(false);
       setPasscode('');
@@ -208,11 +197,6 @@ export default function PumpDashboard() {
       const newStatus = !pumpStatus;
       setPumpStatus(newStatus);
       set(ref(db, getDbPath('status')), newStatus);
-
-      lastStatusRef.current[currentView] = newStatus;
-
-      const msg = newStatus ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
-      showNotification(pumpsData[currentView]?.name || currentView, msg, newStatus ? 'success' : 'warning', false);
     } else {
       alert("ระบบอยู่ในโหมด AUTO ควบคุมด้วยแรงดัน ไม่สามารถกดเปิด-ปิดเองได้");
     }
@@ -275,34 +259,6 @@ export default function PumpDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans relative">
-      
-      {/* --- Floating Notification Banner --- */}
-      {notification && (
-        <div className="fixed top-6 right-6 z-50 max-w-sm w-full pointer-events-auto">
-          {(() => {
-            let bgColor = 'bg-slate-900 border-cyan-500 text-cyan-300';
-            if (notification.type === 'success') bgColor = 'bg-emerald-950/90 border-emerald-500 text-emerald-300';
-            if (notification.type === 'warning') bgColor = 'bg-amber-950/90 border-amber-500 text-amber-300';
-            if (notification.type === 'error') bgColor = 'bg-red-950/90 border-red-500 text-red-300';
-
-            return (
-              <div className={`border-2 rounded-xl p-4 shadow-2xl backdrop-blur-md animate-pulse flex items-start gap-3 transition-all ${bgColor}`}>
-                <Bell className="w-5 h-5 shrink-0 mt-0.5 animate-bounce" />
-                <div className="flex-1">
-                  <h4 className="font-bold text-sm">{notification.title}</h4>
-                  <p className="text-xs mt-0.5 opacity-90 font-semibold">{notification.message}</p>
-                </div>
-                <button 
-                  onClick={() => setNotification(null)}
-                  className="text-white/60 hover:text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })()}
-        </div>
-      )}
 
       {/* --- Modal แอดมิน --- */}
       {showAuthModal && (
@@ -365,7 +321,7 @@ export default function PumpDashboard() {
       {isOfflineOrPowerLoss && (
         <div className="bg-red-500/20 border border-red-500 text-red-300 p-4 rounded-xl mb-6 flex items-center gap-3 animate-pulse">
           <WifiOff className="w-6 h-6 shrink-0 text-red-400" />
-          <div><strong>⚠️ แจ้งเตือน:</strong> เชื่อมต่ออินเตอร์เน็ทไม่ได้</div>
+          <div><strong>⚠️ แจ้งเตือนระบบหลัก:</strong> เชื่อมต่ออินเตอร์เน็ทไม่ได้</div>
         </div>
       )}
 
@@ -384,6 +340,9 @@ export default function PumpDashboard() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {Object.entries(pumpsData).map(([key, pump]) => {
               const currentSetpoint = getPumpSetpoint(pump);
+              // คำนวณสถานะอินเตอร์เน็ตของแต่ละปั๊ม (ถ้าไม่มีข้อมูลส่งมาเกิน 60 วินาที ถือว่าออฟไลน์)
+              const isInternetOnline = (Date.now() - (pumpLastSeen[key] || 0)) < 60000;
+
               return (
                 <div 
                   key={key} 
@@ -393,17 +352,37 @@ export default function PumpDashboard() {
                   <div className={`absolute top-0 left-0 right-0 h-1.5 ${pump.status ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></div>
 
                   <div>
-                    <div className="flex justify-between items-start mb-4">
+                    <div className="flex justify-between items-start mb-3">
                       <div>
-                        {/* แสดงชื่อสถานที่ (เช่น PUMP1 : จุดที่ 1: บ้านไผ่ล้อม) */}
                         <span className="text-xs text-cyan-400 font-semibold uppercase tracking-wider">
                           {key.toUpperCase()} : {pump.name}
                         </span>
                         <h3 className="text-lg font-bold text-white mt-0.5">สถานีบูสเตอร์ปั๊ม</h3>
                       </div>
-                      <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${pump.status ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
-                        {pump.status ? 'RUNNING' : 'STOPPED'}
-                      </span>
+                    </div>
+
+                    {/* --- แถบแสดงสถานะ (1. อินเตอร์เน็ต และ 2. การทำงานของปั๊ม) --- */}
+                    <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 mb-4 space-y-2 text-xs">
+                      {/* สถานะอินเตอร์เน็ต */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400 flex items-center gap-1.5">
+                          <Wifi className="w-3.5 h-3.5 text-slate-400" /> อินเตอร์เน็ต:
+                        </span>
+                        <span className={`font-semibold flex items-center gap-1 ${isInternetOnline ? 'text-emerald-400' : 'text-red-400'}`}>
+                          <span className={`w-2 h-2 rounded-full ${isInternetOnline ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></span>
+                          {isInternetOnline ? 'เชื่อมต่อปกติ' : 'ขาดการเชื่อมต่อ'}
+                        </span>
+                      </div>
+
+                      {/* สถานะการทำงานของปั๊ม */}
+                      <div className="flex items-center justify-between border-t border-slate-900 pt-2">
+                        <span className="text-slate-400 flex items-center gap-1.5">
+                          <Power className="w-3.5 h-3.5 text-slate-400" /> สถานะปั๊ม:
+                        </span>
+                        <span className={`font-bold px-2.5 py-0.5 rounded-md ${pump.status ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                          {pump.status ? 'กำลังทำงาน' : 'สถานะหยุดทำงาน'}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-4 grid grid-cols-2 gap-3 text-center">
@@ -651,10 +630,10 @@ export default function PumpDashboard() {
                             <div className="flex items-center justify-center gap-2">
                               <button onClick={() => handleRowDoubleClick(item)} className="bg-amber-500/20 text-amber-400 p-2 rounded-lg cursor-pointer hover:bg-amber-500/30"><Edit3 className="w-4 h-4" /></button>
                               <button onClick={() => handleDeleteSchedule(item.id)} className="bg-red-500/20 text-red-400 p-2 rounded-lg cursor-pointer hover:bg-red-500/30"><Trash2 className="w-4 h-4" /></button>
-                            </div>
+                          </div>
                           ) : (
                             <span className="text-xs text-slate-600">ต้องล็อกอินแอดมิน</span>
-                          )}
+                        )}
                         </td>
                       </tr>
                     ))
