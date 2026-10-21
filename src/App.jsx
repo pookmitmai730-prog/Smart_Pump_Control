@@ -172,7 +172,7 @@ export default function PumpDashboard() {
   // 🔑 เปลี่ยนรหัสผ่าน Admin ตรงนี้ ('1234')
   const handleAdminLogin = (e) => {
     e.preventDefault();
-    if (passcode === '1234') {
+    if (passcode === '12348') {
       setIsAdminLoggedIn(true);
       setShowAuthModal(false);
       setPasscode('');
