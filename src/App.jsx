@@ -205,7 +205,7 @@ export default function PumpDashboard() {
 
   const handleAdminLogin = (e) => {
     e.preventDefault();
-    if (passcode === '1234') {
+    if (passcode === '12348') {
       setIsAdminLoggedIn(true);
       setShowAuthModal(false);
       setPasscode('');
@@ -391,14 +391,14 @@ export default function PumpDashboard() {
             <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer"><X className="w-5 h-5" /></button>
             <div className="flex justify-center mb-3 text-cyan-400"><Lock className="w-10 h-10" /></div>
             <h3 className="text-lg font-bold text-center mb-1 text-white">เข้าสู่ระบบผู้ดูแลระบบ</h3>
-            <p className="text-slate-400 text-xs text-center mb-5">กรุณากรอกรหัสผ่านเพื่อปลดล็อกสิทธิ์ควบคุม</p>
+            <p className="text-slate-400 text-xs text-center mb-5">กรอกรหัสล็อคอิน</p>
             
             <form onSubmit={handleAdminLogin} className="space-y-4">
               <input 
                 type="password" 
                 value={passcode} 
                 onChange={(e) => setPasscode(e.target.value)}
-                placeholder="PIN Code (เช่น 1234)"
+                placeholder="กรอกรหัสล็อคอิน"
                 autoFocus
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-cyan-400 text-center tracking-widest text-lg"
               />
@@ -920,3 +920,4 @@ export default function PumpDashboard() {
     </div>
   );
 }
+```[cite: 6]
