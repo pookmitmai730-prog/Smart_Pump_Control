@@ -494,7 +494,7 @@ export default function PumpDashboard() {
                         <span className="text-[10px] text-slate-500">m³/h</span>
                       </div>
                       <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
-                        <span className="text-[10px] text-slate-400 uppercase block">แรงดันต้นทาง (ทางออกปั๊ม)</span>
+                        <span className="text-[10px] text-slate-400 uppercase block">แรงดันต้นทาง (ทางออกปั๊ม P2)</span>
                         <span className="text-xl font-extrabold text-blue-400 mt-0.5 block">{formatPressure(pump.p3Outlet)}</span>
                         <span className="text-[10px] text-slate-500">Bar</span>
                       </div>
