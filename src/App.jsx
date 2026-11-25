@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
 import { 
   Activity, Power, Sliders, Thermometer, 
-  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings, Edit3, ArrowRight, ChevronLeft, Zap, Wifi
+  Gauge, AlertTriangle, RefreshCw, Lock, Unlock, Clock, WifiOff, X, Plus, Trash2, Calendar, Settings, Edit3, ArrowRight, ChevronLeft, Zap, Bell, Droplet, Wind
 } from 'lucide-react';
 
 // --- ค่ากำหนด Firebase ---
@@ -24,32 +24,35 @@ const db = getDatabase(app);
 export default function PumpDashboard() {
   const [currentView, setCurrentView] = useState('overview');
 
-  // --- เก็บข้อมูลปั๊มทั้ง 3 จุด (กำหนดชื่อสถานที่ตั้งต้นไว้ที่นี่) ---
+  // --- เก็บข้อมูลปั๊มทั้ง 3 จุด (เพิ่ม dailyTotalFlow และข้อมูลพัดลมระบายความร้อน) ---
   const [pumpsData, setPumpsData] = useState({
-    pump1: { name: "บ้านไผ่ล้อม", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } },
-    pump2: { name: "โนนตาล", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } },
-    pump3: { name: "บ้านคำพอก", status: false, mode: 'AUTO', p3Actual: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 } }
+    pump1: { name: "บ้านไผ่ล้อม", status: false, mode: 'AUTO', p3Actual: 0.0, p3Outlet: 0.0, flowRate: 0.0, dailyTotalFlow: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 }, fanStatus: false, fanMode: 'AUTO', fanSchedules: [] },
+    pump2: { name: "โนนตาล", status: false, mode: 'AUTO', p3Actual: 0.0, p3Outlet: 0.0, flowRate: 0.0, dailyTotalFlow: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 }, fanStatus: false, fanMode: 'AUTO', fanSchedules: [] },
+    pump3: { name: "บ้านคำพอก", status: false, mode: 'AUTO', p3Actual: 0.0, p3Outlet: 0.0, flowRate: 0.0, dailyTotalFlow: 0.0, p3Setpoint: 1.2, current: 0.0, frequency: 0, temperature: 0.0, alarm: null, schedules: [], config: { restartDelay: 5, restartMinPressure: 0.2 }, fanStatus: false, fanMode: 'AUTO', fanSchedules: [] }
   });
-
-  // --- เก็บเวลาอัปเดตล่าสุดของแต่ละปั๊ม เพื่อเช็กสถานะอินเตอร์เน็ต ---
-  const [pumpLastSeen, setPumpLastSeen] = useState({
-    pump1: Date.now(),
-    pump2: Date.now(),
-    pump3: Date.now()
-  });
-  const [, setTick] = useState(0);
 
   // --- State หน้า Detail ---
   const [pumpStatus, setPumpStatus] = useState(false); 
   const [mode, setMode] = useState('AUTO');              
   const [p3Actual, setP3Actual] = useState(0.0);        
+  const [p3Outlet, setP3Outlet] = useState(0.0);        
+  const [flowRate, setFlowRate] = useState(0.0);        
+  const [dailyTotalFlow, setDailyTotalFlow] = useState(0.0); 
   const [p3Setpoint, setP3Setpoint] = useState(1.2);        
   const [current, setCurrent] = useState(0.0);          
   const [frequency, setFrequency] = useState(0);          
   const [temperature, setTemperature] = useState(0.0);  
   const [alarm, setAlarm] = useState(null);             
+
+  // --- State พัดลมระบายความร้อน (Pin 22) ---
+  const [fanStatus, setFanStatus] = useState(false);
+  const [fanMode, setFanMode] = useState('AUTO');
+  const [fanSchedules, setFanSchedules] = useState([]);
+  const [newFanStartTime, setNewFanStartTime] = useState('08:00');
+  const [newFanEndTime, setNewFanEndTime] = useState('17:00');
+  const [editingFanId, setEditingFanId] = useState(null);
   
-  // --- ตารางตั้งค่าช่วงเวลา ---
+  // --- ตารางตั้งค่าช่วงเวลาปั๊ม ---
   const [schedules, setSchedules] = useState([]);
   const [newStartTime, setNewStartTime] = useState('08:00');
   const [newEndTime, setNewEndTime] = useState('17:00');
@@ -63,6 +66,11 @@ export default function PumpDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isOfflineOrPowerLoss, setIsOfflineOrPowerLoss] = useState(false);
 
+  // --- ระบบแจ้งเตือนเดี่ยว ---
+  const [notification, setNotification] = useState(null);
+  const notifTimerRef = useRef(null);
+  const lastStatusRef = useRef({});
+
   // --- ระบบแอดมิน ---
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -75,7 +83,13 @@ export default function PumpDashboard() {
     return (Math.round(val * 100) / 100).toFixed(2);
   };
 
-  // ฟังก์ชันคำนวณหาค่า Setpoint จาก Schedules ของปั๊มแต่ละตัวแบบเรียลไทม์
+  // ฟังก์ชันจัดรูปแบบตัวเลขทั่วไป
+  const formatNumber = (val, decimals = 2) => {
+    if (val === undefined || val === null || isNaN(val)) return "0.00";
+    return Number(val).toFixed(decimals);
+  };
+
+  // ฟังก์ชันคำนวณหาค่า Setpoint
   const getPumpSetpoint = (pump) => {
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -103,21 +117,32 @@ export default function PumpDashboard() {
     return pump.p3Setpoint ?? 1.2;
   };
 
-  // Timer สำหรับอัปเดตหน้าจอทุกๆ 5 วินาที เพื่อเช็กสถานะอินเตอร์เน็ตสดๆ
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTick(prev => prev + 1);
-    }, 5000);
-    return () => clearInterval(timer);
-  }, []);
+  // ฟังก์ชันแสดงการแจ้งเตือน
+  const showNotification = (title, message, type, isAuto = false) => {
+    if (notifTimerRef.current) {
+      clearTimeout(notifTimerRef.current);
+      notifTimerRef.current = null;
+    }
 
-  // เช็กออฟไลน์รวมของระบบ
+    setNotification({ title, message, type });
+
+    if (isAuto) {
+      notifTimerRef.current = setTimeout(() => {
+        setNotification(null);
+      }, 60000);
+    }
+  };
+
+  // เช็กออฟไลน์
   useEffect(() => {
     const interval = setInterval(() => {
       if (lastUpdated) {
         const secondsElapsed = (Date.now() - lastUpdated) / 1000;
         const offline = secondsElapsed > 300;
         setIsOfflineOrPowerLoss(offline);
+        if (offline) {
+          showNotification('การเชื่อมต่อระบบ', 'เชื่อมต่ออินเตอร์เน็ทไม่ได้', 'error', true);
+        }
       }
     }, 5000);
     return () => clearInterval(interval);
@@ -129,39 +154,48 @@ export default function PumpDashboard() {
     const unsubscribe = onValue(pumpsRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        const now = Date.now();
-        setPumpLastSeen(prev => ({
-          pump1: data.pump1 ? now : prev.pump1,
-          pump2: data.pump2 ? now : prev.pump2,
-          pump3: data.pump3 ? now : prev.pump3,
-        }));
+        Object.entries(data).forEach(([key, newPump]) => {
+          const currentPumpStatus = newPump.status ?? false;
+          const isAutoMode = newPump.mode === 'AUTO';
 
-        // ล็อกชื่อสถานที่ (name) ไว้ไม่ให้หายไปเวลารับข้อมูลจาก Firebase
+          if (lastStatusRef.current[key] !== undefined && lastStatusRef.current[key] !== currentPumpStatus) {
+            const msg = currentPumpStatus ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
+            showNotification(newPump.name || key, msg, currentPumpStatus ? 'success' : 'warning', isAutoMode);
+          }
+          lastStatusRef.current[key] = currentPumpStatus;
+        });
+
         setPumpsData(prev => ({
           pump1: { ...prev.pump1, ...(data.pump1 || {}), name: prev.pump1.name },
           pump2: { ...prev.pump2, ...(data.pump2 || {}), name: prev.pump2.name },
           pump3: { ...prev.pump3, ...(data.pump3 || {}), name: prev.pump3.name },
         }));
-        setLastUpdated(now);
+        setLastUpdated(Date.now());
       }
     });
 
     return () => unsubscribe();
   }, []);
 
-  // เมื่อเปลี่ยนหน้าไปดูปั๊มตัวไหน ให้นำข้อมูลมาผูกเข้ากับ State หลัก
+  // เมื่อเปลี่ยนหน้าไปดูปั๊มตัวไหน
   useEffect(() => {
     if (currentView !== 'overview' && pumpsData[currentView]) {
       const p = pumpsData[currentView];
       setPumpStatus(p.status ?? false);
       setMode(p.mode ?? 'AUTO');
       setP3Actual(p.p3Actual ?? 0.0);
+      setP3Outlet(p.p3Outlet ?? 0.0);
+      setFlowRate(p.flowRate ?? 0.0);
+      setDailyTotalFlow(p.dailyTotalFlow ?? 0.0);
       setP3Setpoint(getPumpSetpoint(p));
       setCurrent(p.current ?? 0.0);
       setFrequency(p.frequency ?? 0);
       setTemperature(p.temperature ?? 0.0);
       setAlarm(p.alarm ?? null);
       setSchedules(p.schedules ?? []);
+      setFanStatus(p.fanStatus ?? false);
+      setFanMode(p.fanMode ?? 'AUTO');
+      setFanSchedules(p.fanSchedules ?? []);
       if (p.config) {
         setRestartDelay(p.config.restartDelay ?? 5);
         setRestartMinPressure(p.config.restartMinPressure ?? 0.2);
@@ -169,10 +203,9 @@ export default function PumpDashboard() {
     }
   }, [currentView, pumpsData]);
 
-  // 🔑 เปลี่ยนรหัสผ่าน Admin ตรงนี้ ('1234')
   const handleAdminLogin = (e) => {
     e.preventDefault();
-    if (passcode === '12348') {
+    if (passcode === '1234') {
       setIsAdminLoggedIn(true);
       setShowAuthModal(false);
       setPasscode('');
@@ -197,9 +230,72 @@ export default function PumpDashboard() {
       const newStatus = !pumpStatus;
       setPumpStatus(newStatus);
       set(ref(db, getDbPath('status')), newStatus);
+
+      lastStatusRef.current[currentView] = newStatus;
+
+      const msg = newStatus ? 'ปั๊มกำลังทำงาน' : 'ปั๊มหยุดทำงาน';
+      showNotification(pumpsData[currentView]?.name || currentView, msg, newStatus ? 'success' : 'warning', false);
     } else {
       alert("ระบบอยู่ในโหมด AUTO ควบคุมด้วยแรงดัน ไม่สามารถกดเปิด-ปิดเองได้");
     }
+  };
+
+  // --- ฟังก์ชันควบคุมและตั้งเวลาพัดลมระบายความร้อน ---
+  const handleFanModeToggle = () => {
+    if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
+    const newFanMode = fanMode === 'AUTO' ? 'MANUAL' : 'AUTO';
+    setFanMode(newFanMode);
+    set(ref(db, getDbPath('fanMode')), newFanMode);
+  };
+
+  const handleFanPowerToggle = () => {
+    if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
+    if (fanMode === 'MANUAL') {
+      const newFanStatus = !fanStatus;
+      setFanStatus(newFanStatus);
+      set(ref(db, getDbPath('fanStatus')), newFanStatus);
+    } else {
+      alert("พัดลมอยู่ในโหมด AUTO ควบคุมตามช่วงเวลา ไม่สามารถกดเปิด-ปิดเองได้");
+    }
+  };
+
+  const handleAddOrUpdateFanSchedule = () => {
+    if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
+    let updatedFanSchedules;
+    if (editingFanId !== null) {
+      updatedFanSchedules = fanSchedules.map(item =>
+        item.id === editingFanId ? { ...item, startTime: newFanStartTime, endTime: newFanEndTime, enabled: true } : item
+      );
+      setEditingFanId(null);
+    } else {
+      const newItem = { id: Date.now(), startTime: newFanStartTime, endTime: newFanEndTime, enabled: true };
+      updatedFanSchedules = [...fanSchedules, newItem];
+    }
+    setFanSchedules(updatedFanSchedules);
+    set(ref(db, getDbPath('fanSchedules')), updatedFanSchedules);
+    setNewFanStartTime('08:00');
+    setNewFanEndTime('17:00');
+  };
+
+  const handleFanRowDoubleClick = (item) => {
+    if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
+    setEditingFanId(item.id);
+    setNewFanStartTime(item.startTime);
+    setNewFanEndTime(item.endTime);
+  };
+
+  const handleCancelFanEdit = () => {
+    setEditingFanId(null);
+    setNewFanStartTime('08:00');
+    setNewFanEndTime('17:00');
+  };
+
+  const handleDeleteFanSchedule = (id) => {
+    if (!isAdminLoggedIn) { setShowAuthModal(true); return; }
+    const updatedFanSchedules = fanSchedules.filter(item => item.id !== id);
+    setFanSchedules(updatedFanSchedules);
+    set(ref(db, getDbPath('fanSchedules')), updatedFanSchedules);
+    if (editingFanId === id) handleCancelFanEdit();
   };
 
   const handleAddOrUpdateSchedule = () => {
@@ -259,6 +355,34 @@ export default function PumpDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans relative">
+      
+      {/* --- Floating Notification Banner --- */}
+      {notification && (
+        <div className="fixed top-6 right-6 z-50 max-w-sm w-full pointer-events-auto">
+          {(() => {
+            let bgColor = 'bg-slate-900 border-cyan-500 text-cyan-300';
+            if (notification.type === 'success') bgColor = 'bg-emerald-950/90 border-emerald-500 text-emerald-300';
+            if (notification.type === 'warning') bgColor = 'bg-amber-950/90 border-amber-500 text-amber-300';
+            if (notification.type === 'error') bgColor = 'bg-red-950/90 border-red-500 text-red-300';
+
+            return (
+              <div className={`border-2 rounded-xl p-4 shadow-2xl backdrop-blur-md animate-pulse flex items-start gap-3 transition-all ${bgColor}`}>
+                <Bell className="w-5 h-5 shrink-0 mt-0.5 animate-bounce" />
+                <div className="flex-1">
+                  <h4 className="font-bold text-sm">{notification.title}</h4>
+                  <p className="text-xs mt-0.5 opacity-90 font-semibold">{notification.message}</p>
+                </div>
+                <button 
+                  onClick={() => setNotification(null)}
+                  className="text-white/60 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* --- Modal แอดมิน --- */}
       {showAuthModal && (
@@ -321,7 +445,7 @@ export default function PumpDashboard() {
       {isOfflineOrPowerLoss && (
         <div className="bg-red-500/20 border border-red-500 text-red-300 p-4 rounded-xl mb-6 flex items-center gap-3 animate-pulse">
           <WifiOff className="w-6 h-6 shrink-0 text-red-400" />
-          <div><strong>⚠️ แจ้งเตือนระบบหลัก:</strong> เชื่อมต่ออินเตอร์เน็ทไม่ได้</div>
+          <div><strong>⚠️ แจ้งเตือน:</strong> เชื่อมต่ออินเตอร์เน็ทไม่ได้</div>
         </div>
       )}
 
@@ -340,9 +464,6 @@ export default function PumpDashboard() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {Object.entries(pumpsData).map(([key, pump]) => {
               const currentSetpoint = getPumpSetpoint(pump);
-              // คำนวณสถานะอินเตอร์เน็ตของแต่ละปั๊ม (ถ้าไม่มีข้อมูลส่งมาเกิน 60 วินาที ถือว่าออฟไลน์)
-              const isInternetOnline = (Date.now() - (pumpLastSeen[key] || 0)) < 60000;
-
               return (
                 <div 
                   key={key} 
@@ -352,40 +473,35 @@ export default function PumpDashboard() {
                   <div className={`absolute top-0 left-0 right-0 h-1.5 ${pump.status ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></div>
 
                   <div>
-                    <div className="flex justify-between items-start mb-3">
+                    <div className="flex justify-between items-start mb-4">
                       <div>
+                        {/* แสดงชื่อสถานที่ */}
                         <span className="text-xs text-cyan-400 font-semibold uppercase tracking-wider">
                           {key.toUpperCase()} : {pump.name}
                         </span>
                         <h3 className="text-lg font-bold text-white mt-0.5">สถานีบูสเตอร์ปั๊ม</h3>
                       </div>
+                      <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${pump.status ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                        {pump.status ? 'RUNNING' : 'STOPPED'}
+                      </span>
                     </div>
 
-                    {/* --- แถบแสดงสถานะ (1. อินเตอร์เน็ต และ 2. การทำงานของปั๊ม) --- */}
-                    <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 mb-4 space-y-2 text-xs">
-                      {/* สถานะอินเตอร์เน็ต */}
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400 flex items-center gap-1.5">
-                          <Wifi className="w-3.5 h-3.5 text-slate-400" /> อินเตอร์เน็ต:
-                        </span>
-                        <span className={`font-semibold flex items-center gap-1 ${isInternetOnline ? 'text-emerald-400' : 'text-red-400'}`}>
-                          <span className={`w-2 h-2 rounded-full ${isInternetOnline ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></span>
-                          {isInternetOnline ? 'เชื่อมต่อปกติ' : 'ขาดการเชื่อมต่อ'}
-                        </span>
+                    {/* อัตราการไหล และ แรงดันต้นทาง */}
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 uppercase block">อัตราการไหล</span>
+                        <span className="text-xl font-extrabold text-emerald-400 mt-0.5 block">{formatNumber(pump.flowRate, 1)}</span>
+                        <span className="text-[10px] text-slate-500">m³/h</span>
                       </div>
-
-                      {/* สถานะการทำงานของปั๊ม */}
-                      <div className="flex items-center justify-between border-t border-slate-900 pt-2">
-                        <span className="text-slate-400 flex items-center gap-1.5">
-                          <Power className="w-3.5 h-3.5 text-slate-400" /> สถานะปั๊ม:
-                        </span>
-                        <span className={`font-bold px-2.5 py-0.5 rounded-md ${pump.status ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
-                          {pump.status ? 'กำลังทำงาน' : 'สถานะหยุดทำงาน'}
-                        </span>
+                      <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 uppercase block">แรงดันต้นทาง (ทางออกปั๊ม)</span>
+                        <span className="text-xl font-extrabold text-blue-400 mt-0.5 block">{formatPressure(pump.p3Outlet)}</span>
+                        <span className="text-[10px] text-slate-500">Bar</span>
                       </div>
                     </div>
 
-                    <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-4 grid grid-cols-2 gap-3 text-center">
+                    {/* แรงดันปลายสาย & Setpoint */}
+                    <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-3 grid grid-cols-2 gap-3 text-center">
                       <div>
                         <span className="text-[10px] text-slate-400 uppercase">แรงดันจริง (P3)</span>
                         <span className="text-2xl font-extrabold text-cyan-400 block mt-0.5">{formatPressure(pump.p3Actual)}</span>
@@ -398,18 +514,24 @@ export default function PumpDashboard() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-4">
-                      <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
-                        <span>โหมด</span>
-                        <strong className="text-cyan-400 block mt-0.5">{pump.mode}</strong>
+                    {/* โหมดการทำงาน */}
+                    <div className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-900 text-center mb-3">
+                      <span className="text-xs text-slate-400">โหมดการทำงาน: </span>
+                      <strong className="text-cyan-400 text-sm ml-1">{pump.mode}</strong>
+                    </div>
+
+                    {/* 🟢 เพิ่มส่วนแสดงปริมาณน้ำจ่ายรวมประจำวัน (24 ชม. เที่ยงคืนถึงเที่ยงคืน) */}
+                    <div className="bg-gradient-to-r from-blue-950/40 to-cyan-950/40 p-3 rounded-xl border border-blue-500/30 flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Droplet className="w-5 h-5 text-cyan-400 shrink-0" />
+                        <div>
+                          <span className="text-[10px] text-slate-300 block uppercase font-semibold">ปริมาณน้ำจ่ายรวม (24 ชม.)</span>
+                          <span className="text-[9px] text-slate-400">00:00 - 24:00 น.</span>
+                        </div>
                       </div>
-                      <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
-                        <span>ความถี่</span>
-                        <strong className="text-amber-400 block mt-0.5">{pump.frequency || 0} Hz</strong>
-                      </div>
-                      <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-900 text-center">
-                        <span>กระแส</span>
-                        <strong className="text-slate-200 block mt-0.5">{(pump.current || 0).toFixed(1)} A</strong>
+                      <div className="text-right">
+                        <span className="text-xl font-extrabold text-cyan-300">{formatNumber(pump.dailyTotalFlow, 2)}</span>
+                        <span className="text-xs text-slate-400 ml-1">m³</span>
                       </div>
                     </div>
                   </div>
@@ -568,7 +690,7 @@ export default function PumpDashboard() {
             </div>
           </div>
 
-          {/* --- ตารางตั้งค่าช่วงเวลา --- */}
+          {/* --- ตารางตั้งค่าช่วงเวลาปั๊ม --- */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 mb-1">
               <Calendar className="w-5 h-5" /> ตั้งค่าช่วงเวลาและขีดจำกัดแรงดันหยุดปั๊ม
@@ -615,30 +737,177 @@ export default function PumpDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {schedules.length > 0 ? (
+                  {schedules.length === 0 ? (
+                    <tr>
+                      <td colSpan="4" className="text-center py-6 text-slate-500 text-xs">ยังไม่มีการตั้งค่าช่วงเวลา</td>
+                    </tr>
+                  ) : (
                     schedules.map((item, index) => (
                       <tr 
                         key={item.id} 
                         onDoubleClick={() => handleRowDoubleClick(item)}
-                        className={`border-b border-slate-800 cursor-pointer ${editingId === item.id ? 'bg-amber-500/20' : 'hover:bg-slate-900/60'}`}
+                        className={`border-b border-slate-800/60 hover:bg-slate-800/30 cursor-pointer transition-colors ${editingId === item.id ? 'bg-amber-950/30 border-amber-500/50' : ''}`}
                       >
-                        <td className="py-3 px-4 font-medium text-slate-400">{index + 1}</td>
-                        <td className="py-3 px-4 text-cyan-400 font-semibold">{item.startTime} น. - {item.endTime} น.</td>
-                        <td className="py-3 px-4 font-bold">{item.limitPressure} Bar</td>
+                        <td className="py-3 px-4 font-semibold text-cyan-400">{index + 1}</td>
+                        <td className="py-3 px-4 flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-slate-400" />
+                          <span>{item.startTime} - {item.endTime} น.</span>
+                          {editingId === item.id && <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded border border-amber-500/30">กำลังแก้ไข</span>}
+                        </td>
+                        <td className="py-3 px-4 font-bold text-slate-100">{formatPressure(item.limitPressure)} Bar</td>
                         <td className="py-3 px-4 text-center">
-                          {isAdminLoggedIn ? (
-                            <div className="flex items-center justify-center gap-2">
-                              <button onClick={() => handleRowDoubleClick(item)} className="bg-amber-500/20 text-amber-400 p-2 rounded-lg cursor-pointer hover:bg-amber-500/30"><Edit3 className="w-4 h-4" /></button>
-                              <button onClick={() => handleDeleteSchedule(item.id)} className="bg-red-500/20 text-red-400 p-2 rounded-lg cursor-pointer hover:bg-red-500/30"><Trash2 className="w-4 h-4" /></button>
-                          </div>
-                          ) : (
-                            <span className="text-xs text-slate-600">ต้องล็อกอินแอดมิน</span>
-                        )}
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); if(confirm('ต้องการลบช่วงเวลานี้หรือไม่?')) handleDeleteSchedule(item.id); }} 
+                            className="p-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors cursor-pointer"
+                            title="ลบ"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </td>
                       </tr>
                     ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+
+          {/* --- ควบคุมและตั้งเวลาเปิด-ปิดพัดลมระบายความร้อน (Pin 22) --- */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
+                  <Wind className="w-5 h-5" /> ควบคุมและตั้งเวลาเปิด-ปิดพัดลมระบายความร้อน ({currentView.toUpperCase()} : Pin 22)
+                </h2>
+                <p className="text-slate-400 text-xs mt-1">
+                  สถานะพัดลม:{" "}
+                  <strong className={fanStatus ? 'text-emerald-400' : 'text-slate-400'}>
+                    {fanStatus ? 'กำลังทำงาน (ON)' : 'หยุดทำงาน (OFF)'}
+                  </strong>{" "}
+                  | โหมด: <strong className="text-cyan-400">{fanMode}</strong>
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleFanModeToggle}
+                  className={`text-xs px-3 py-2 rounded-xl font-bold border cursor-pointer transition-all ${
+                    fanMode === 'AUTO'
+                      ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
+                      : 'bg-blue-600 text-white border-blue-500'
+                  }`}
+                >
+                  โหมด: {fanMode} {isAdminLoggedIn ? '' : '🔒'}
+                </button>
+                <button
+                  onClick={handleFanPowerToggle}
+                  disabled={fanMode === 'AUTO'}
+                  className={`text-xs px-4 py-2 rounded-xl font-bold border cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                    fanStatus
+                      ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400 border-red-500/40'
+                      : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border-emerald-500/40'
+                  }`}
+                >
+                  {fanStatus ? 'สั่งปิดพัดลม' : 'สั่งเปิดพัดลม'} {isAdminLoggedIn ? '' : '🔒'}
+                </button>
+              </div>
+            </div>
+
+            {isAdminLoggedIn ? (
+              <div className={`p-4 rounded-xl border mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4 items-end ${editingFanId !== null ? 'bg-amber-950/20 border-amber-500/50' : 'bg-slate-950 border-slate-800'}`}>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">เวลาเปิดพัดลม</label>
+                  <input
+                    type="time"
+                    value={newFanStartTime}
+                    onChange={(e) => setNewFanStartTime(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">เวลาปิดพัดลม</label>
+                  <input
+                    type="time"
+                    value={newFanEndTime}
+                    onChange={(e) => setNewFanEndTime(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleAddOrUpdateFanSchedule}
+                    className={`flex-1 font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 text-sm cursor-pointer h-10 ${
+                      editingFanId !== null ? 'bg-amber-500 text-slate-950' : 'bg-cyan-500 text-slate-950'
+                    }`}
+                  >
+                    {editingFanId !== null ? <><Edit3 className="w-4 h-4" /> บันทึกการแก้ไข</> : <><Plus className="w-4 h-4" /> เพิ่มช่วงเวลาพัดลม</>}
+                  </button>
+                  {editingFanId !== null && (
+                    <button
+                      onClick={handleCancelFanEdit}
+                      className="bg-slate-800 text-slate-300 px-3 py-2 rounded-lg text-sm h-10 cursor-pointer"
+                    >
+                      ยกเลิก
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-950/50 border border-slate-800 p-4 rounded-xl mb-6 text-center text-xs text-slate-400">
+                🔒 กรุณาล็อกอินแอดมินที่มุมบนขวา เพื่อเพิ่ม แก้ไข หรือสั่งเปิด-ปิดพัดลมระบายความร้อน
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-300">
+                <thead className="bg-slate-950 text-slate-400 uppercase text-xs border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4">ลำดับ</th>
+                    <th className="py-3 px-4">ช่วงเวลาทำงานพัดลม (ดับเบิลคลิกเพื่อแก้ไข)</th>
+                    <th className="py-3 px-4 text-center">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fanSchedules.length === 0 ? (
+                    <tr>
+                      <td colSpan="3" className="text-center py-6 text-slate-500 text-xs">
+                        ยังไม่มีการตั้งค่าช่วงเวลาเปิด-ปิดพัดลมระบายความร้อน
+                      </td>
+                    </tr>
                   ) : (
-                    <tr><td colSpan="4" className="text-center py-6 text-slate-500">ยังไม่มีข้อมูลช่วงเวลาแรงดันที่ตั้งไว้</td></tr>
+                    fanSchedules.map((item, index) => (
+                      <tr
+                        key={item.id || index}
+                        onDoubleClick={() => handleFanRowDoubleClick(item)}
+                        className={`border-b border-slate-800/60 hover:bg-slate-800/30 cursor-pointer transition-colors ${
+                          editingFanId === item.id ? 'bg-amber-950/30 border-amber-500/50' : ''
+                        }`}
+                      >
+                        <td className="py-3 px-4 font-semibold text-cyan-400">{index + 1}</td>
+                        <td className="py-3 px-4 flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-slate-400" />
+                          <span>{item.startTime} - {item.endTime} น.</span>
+                          {editingFanId === item.id && (
+                            <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded border border-amber-500/30">
+                              กำลังแก้ไข
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm('ต้องการลบช่วงเวลาพัดลมนี้หรือไม่?')) handleDeleteFanSchedule(item.id);
+                            }}
+                            className="p-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors cursor-pointer"
+                            title="ลบ"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
